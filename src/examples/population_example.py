@@ -29,8 +29,8 @@ def main(args):
 
     run(tstop)
 
-    output_population.printSpikes("simpleNetwork_output.pkl")
-    input_population_arr.printSpikes("simpleNetwork_input.pkl")
+    output_population.write_data("simpleNetwork_output.pkl",'spikes')
+    input_population_arr.write_data("simpleNetwork_input.pkl",'spikes')
     #output_population.print_v("simpleNetwork.v")
     end()
 
