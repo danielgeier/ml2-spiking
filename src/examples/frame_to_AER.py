@@ -28,10 +28,11 @@ class frameToAERConverter():
         self.image_sub = rospy.Subscriber("/AADC_AudiTT/camera_front/image_raw", Image, self.image_callback, queue_size=1, buff_size=65536*32)
         self.aer_pub = rospy.Publisher("/dvs/events", Image)
 
+
         rospy.loginfo("Waiting for image topics...")
 
     def image_callback(self, ros_image):
-        print 'jaja mach!'
+        #print 'jaja mach!'
         # Use cv_bridge() to convert the ROS image to OpenCV format
         try:
             frame = self.bridge.imgmsg_to_cv2(ros_image)
@@ -41,17 +42,23 @@ class frameToAERConverter():
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         grayResized = cv2.resize(gray, (DVS_WIDTH, DVS_HEIGHT))
 
-        img = cv2.resize(gray, (60, 30), interpolation=cv2.INTER_AREA)
+        threshold = 70
+
+
+        #img = cv2.resize(gray, (60, 30), interpolation=cv2.INTER_AREA)
+        lala,img = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
 
         cv2.imshow('graublau', img)
+        cv2.waitKey()
 
-        image_message = self.bridge.cv2_to_imgmsg(gray, encoding="passthrough")
+
+        image_message = self.bridge.cv2_to_imgmsg(img, encoding="passthrough")
         self.aer_pub.publish(image_message)
 
 
     def process_image(self, diffImage, polarity):
-        threshold = 20
-        mask = cv2.threshold(diffImage, threshold, 255, cv2.THRESH_BINARY)
+        threshold = 200
+        mask = cv2.threshold(diffImage, threshold, 1, cv2.THRESH_BINARY)
         event = cv2.findNonZero(mask[1])
 
         

@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 # PKG = 'dvs_simulation'
+from __future__ import division
+
 import roslib  # ; roslib.load_manifest(PKG)
 
 import rospy
@@ -8,12 +10,14 @@ import cv2
 import std_msgs
 # from dvs_msgs.msg import Event
 # from dvs_msgs.msg import EventArray
+from geometry_msgs.msg import Vector3
 from sensor_msgs.msg import Image, CameraInfo
 from rospy.numpy_msg import numpy_msg
 import numpy as np
 from cv_bridge import CvBridge, CvBridgeError
 import pyNN
-from pyNN.nest import Population, SpikeSourcePoisson, SpikeSourceArray, AllToAllConnector, run, setup, IF_curr_alpha
+from pyNN.nest import Population, SpikeSourcePoisson, SpikeSourceArray, AllToAllConnector, run, setup, IF_curr_alpha, \
+    end
 from pyNN.nest.projections import Projection
 
 import matplotlib.pyplot as plt
@@ -27,30 +31,41 @@ class NeuronListener:
 
         self.bridge = CvBridge()
 
+
         self.image_sub = rospy.Subscriber("/dvs/events", Image, self.process_image)
+        self.aer_pub = rospy.Publisher("/AADC_AudiTT/carUpdate", Vector3)
         #  expoisson.all_cells_source.
 
     def process_image(self, image):
 
-        setup(timestep=0.1)
-
-        # Orginal: NE = 960 * 1280
-        NE = 50 * 100
-
-        self.pop_in = Population((50, 100), SpikeSourcePoisson, {'rate': np.zeros(NE)})
-        self.pop_out = Population(1, IF_curr_alpha, {'tau_refrac': 5 })
-
-        projection = Projection(self.pop_in, self.pop_out, AllToAllConnector())
-        projection.setWeights(1.0)
-
         print 'Bild ist da!'
         frame = self.bridge.imgmsg_to_cv2(image)
         # Set the image_data to pop
-        self.pop_in.set(rate=frame.astype(float).flatten())
         cv2.imshow('graublau', frame)
 
-        self.pop_in.record('spikes')
-        self.pop_out.record('spikes')
+        setup(timestep=0.1)
+
+        # Orginal: NE = 960 * 1280
+        NE = 50 * 100 / 2.0
+
+      #  self.pop_in = Population((50, 100), SpikeSourcePoisson, {'rate': np.zeros(NE)})
+        self.pop_in_l = Population((50, 50), SpikeSourcePoisson, {'rate': np.zeros(NE)})
+        self.pop_in_r = Population((50, 50), SpikeSourcePoisson, {'rate': np.zeros(NE)})
+        self.pop_out_l = Population(1, IF_curr_alpha, {'tau_refrac': 1 })
+        self.pop_out_r = Population(1, IF_curr_alpha, {'tau_refrac': 1})
+
+        projection_l = Projection(self.pop_in_l, self.pop_out_l, AllToAllConnector())
+        projection_r = Projection(self.pop_in_r, self.pop_out_r, AllToAllConnector())
+        projection_l.setWeights(1.0)
+        projection_r.setWeights(1.0)
+
+        self.pop_in_l.set(rate=frame.astype(float).flatten())
+        self.pop_in_r.set(rate=frame.astype(float).flatten())
+
+        self.pop_in_l.record('spikes')
+        self.pop_in_r.record('spikes')
+        self.pop_out_l.record('spikes')
+        self.pop_out_r.record('spikes')
 
         tstop = 100.0
         run(tstop)
@@ -58,8 +73,28 @@ class NeuronListener:
         # self.pop_out.printSpikes('out_spikes.h5')
         # self.pop_in.printSpikes('in_spikes.h5')
 
-        spikes_in = self.pop_in.get_data()
-        data_out = self.pop_out.get_data()
+        #spikes_in = self.pop_in.get_data()
+        data_out_l = self.pop_out_l.get_data()
+        data_out_r = self.pop_out_r.get_data()
+
+        end()
+
+        num_spikes_l = data_out_l.segments[0].spiketrains[0].size
+        num_spikes_r = data_out_r.segments[0].spiketrains[0].size
+
+        num_spikes_l = float(num_spikes_l)
+        num_spikes_r = float(num_spikes_r)
+
+        if (num_spikes_l > num_spikes_r) :
+            self.aer_pub.publish(Vector3(5.0, 0.0, -num_spikes_l)) # nach rechts lenken
+        else :
+            self.aer_pub.publish(Vector3(5.0, 0.0, num_spikes_r))
+      #links lenken
+
+
+
+
+        #self.aer_pub.publish(Vector3(10.0, 0.0, num_spikes))
 
         # for seg in spikes_in.segments:
         #     print seg
@@ -71,6 +106,7 @@ class NeuronListener:
 
 
         for seg in data_out.segments:
+            print "SEGMENTS"
             print seg
             for asig in seg.analogsignals:
                 print asig

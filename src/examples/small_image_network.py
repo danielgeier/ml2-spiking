@@ -23,10 +23,10 @@ import matplotlib.pyplot as plt
 
 setup(timestep=0.1)
 
-image = cv2.imread('/fzi/ids/mlprak2/Bilder/impuls.tif');
+image = cv2.imread('/fzi/ids/mlprak2/Bilder/impuls.tif')
 
-image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY);
-frame = image
+image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+frame = np.zeros(image.size) + 255
 
 rates_init = np.zeros(frame.size)
 
@@ -36,7 +36,7 @@ pop_out = Population(1, IF_curr_alpha, {'tau_refrac': 5 })
 projection = Projection(pop_in, pop_out, AllToAllConnector())
 projection.setWeights(1.0)
 
-pop_in.set(rate=frame.astype(float).flatten())
+pop_in.set(rate=image.astype(float).flatten())
 
 pop_in.record('spikes')
 pop_out.record('spikes')
@@ -53,9 +53,9 @@ for seg in data_out.segments:
     for st in seg.spiketrains:
         print st
         
-
-
 for seg in spikes_in.segments:
     print seg    
     for st in seg.spiketrains:
         print st
+
+
