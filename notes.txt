@@ -1,0 +1,4 @@
+/robot_folders/checkout/ml-praktikum/catkin_workspace/src/kog-auto-ws-2015/cvs_model_resources/worlds
+Zeile 3612 Bildresolution orginal:(1280x960) 
+	//Zeile 3638 Camerpose realtiv zum chassi, orginal: (0 0 1)
+Zeile 3651 Orginal: <pose frame=''>0.08 0 0.25 0 0.2 0</pose>
