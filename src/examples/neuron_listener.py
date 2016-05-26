@@ -36,31 +36,48 @@ class NeuronListener:
         self.aer_pub = rospy.Publisher("/AADC_AudiTT/carUpdate", Vector3)
         #  expoisson.all_cells_source.
 
+
     def process_image(self, image):
 
-        print 'Bild ist da!'
+
+        #print 'Bild ist da!'
         frame = self.bridge.imgmsg_to_cv2(image)
         # Set the image_data to pop
         cv2.imshow('graublau', frame)
 
+
         setup(timestep=0.1)
 
         # Orginal: NE = 960 * 1280
-        NE = 50 * 100 / 2.0
+        NE = 30 * 100 / 2.0
 
       #  self.pop_in = Population((50, 100), SpikeSourcePoisson, {'rate': np.zeros(NE)})
-        self.pop_in_l = Population((50, 50), SpikeSourcePoisson, {'rate': np.zeros(NE)})
-        self.pop_in_r = Population((50, 50), SpikeSourcePoisson, {'rate': np.zeros(NE)})
-        self.pop_out_l = Population(1, IF_curr_alpha, {'tau_refrac': 1 })
-        self.pop_out_r = Population(1, IF_curr_alpha, {'tau_refrac': 1})
+        # self.pop_in_l = Population((50, 50), SpikeSourcePoisson, {'rate': np.zeros(NE)})
+        # self.pop_in_r = Population((50, 50), SpikeSourcePoisson, {'rate': np.zeros(NE)})
+        self.pop_in_l = Population((30, 50), IF_curr_alpha, {'i_offset': np.zeros(NE)})
+        self.pop_in_r = Population((30, 50), IF_curr_alpha, {'i_offset': np.zeros(NE)})
+
+        self.pop_out_l = Population(1, IF_curr_alpha, {'tau_refrac': 1, 'v_thresh' : -50})
+        self.pop_out_r = Population(1, IF_curr_alpha, {'tau_refrac': 1, 'v_thresh' : -50})
 
         projection_l = Projection(self.pop_in_l, self.pop_out_l, AllToAllConnector())
         projection_r = Projection(self.pop_in_r, self.pop_out_r, AllToAllConnector())
         projection_l.setWeights(1.0)
         projection_r.setWeights(1.0)
 
-        self.pop_in_l.set(rate=frame.astype(float).flatten())
-        self.pop_in_r.set(rate=frame.astype(float).flatten())
+        #frame_l = frame[0:50, 0:50]
+        #frame_r = frame[0:50, 50:100]
+
+        frame_l = frame[20:50, 0:50]
+        frame_r = frame[20:50, 50:100]
+
+        #cv2.imshow('lala', frame_l)
+        #cv2.waitKey()
+        #cv2.imshow('lala2', frame_r)
+        #cv2.waitKey()
+
+        self.pop_in_l.set(i_offset=frame_l.astype(float).flatten())
+        self.pop_in_r.set(i_offset=frame_r.astype(float).flatten())
 
         self.pop_in_l.record('spikes')
         self.pop_in_r.record('spikes')
@@ -82,13 +99,19 @@ class NeuronListener:
         num_spikes_l = data_out_l.segments[0].spiketrains[0].size
         num_spikes_r = data_out_r.segments[0].spiketrains[0].size
 
-        num_spikes_l = float(num_spikes_l)
-        num_spikes_r = float(num_spikes_r)
+        # num_spikes_l = float(num_spikes_l)
+        # num_spikes_r = float(num_spikes_r)
 
-        if (num_spikes_l > num_spikes_r) :
-            self.aer_pub.publish(Vector3(5.0, 0.0, -num_spikes_l)) # nach rechts lenken
-        else :
-            self.aer_pub.publish(Vector3(5.0, 0.0, num_spikes_r))
+        num_spikes_diff = float(num_spikes_l) -float(num_spikes_r)
+        print num_spikes_l
+        print num_spikes_r
+        #print num_spikes_diff
+
+
+       # if (num_spikes_diff > num_spikes_r) :
+        self.aer_pub.publish(Vector3(0.1, 0.0, num_spikes_diff)) # nach rechts lenken
+       # else :
+         #   self.aer_pub.publish(Vector3(1.0, 0.0, num_spikes_r))
       #links lenken
 
 
@@ -96,22 +119,20 @@ class NeuronListener:
 
         #self.aer_pub.publish(Vector3(10.0, 0.0, num_spikes))
 
-        # for seg in spikes_in.segments:
+        # for seg in self.pop_in_l.get_data().segments:
         #     print seg
-        #     for asig in seg.analogsignals:
-        #         print asig
         #     for st in seg.spiketrains:
         #         print st
 
 
 
-        for seg in data_out.segments:
-            print "SEGMENTS"
-            print seg
-            for asig in seg.analogsignals:
-                print asig
-            for st in seg.spiketrains:
-                print st
+        # for seg in data_out.segments:
+        #     print "SEGMENTS"
+        #     print seg
+        #     for asig in seg.analogsignals:
+        #         print asig
+        #     for st in seg.spiketrains:
+        #         print st
 
                     # n_panels = sum(a.shape[1] for a in data_out.segments[0].analogsignalarrays) + 2
                     # plt.subplot(n_panels, 1, 1)

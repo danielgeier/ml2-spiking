@@ -48,8 +48,8 @@ class frameToAERConverter():
         #img = cv2.resize(gray, (60, 30), interpolation=cv2.INTER_AREA)
         lala,img = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
 
-        cv2.imshow('graublau', img)
-        cv2.waitKey()
+        #cv2.imshow('graublau', img)
+        #cv2.waitKey()
 
 
         image_message = self.bridge.cv2_to_imgmsg(img, encoding="passthrough")
