@@ -6,12 +6,19 @@ Email : yuhuang.hu@uzh.ch
 """
 
 import cv2
+import numpy as np
+
 from pyqtgraph.Qt import QtGui, QtCore
 from pyqtgraph.widgets.RawImageWidget import RawImageWidget
 from pyqtgraph.widgets.FileDialog import FileDialog
 from pyqtgraph.widgets.ComboBox import ComboBox
 
 from simretina import dataset, gui, retina
+
+# monkey patch dataset
+cardrive = np.load('driving_video.npy')
+def better_taichi(size='unused'): return cardrive
+dataset.get_taichi = better_taichi
 
 # global parameters
 win_width = 1280
