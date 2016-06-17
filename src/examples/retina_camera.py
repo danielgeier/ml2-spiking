@@ -1,8 +1,8 @@
-import cv2
-import rospy
-import numpy as np
 import sys
 
+import cv2
+import numpy as np
+import rospy
 from cv_bridge import CvBridge, CvBridgeError
 from sensor_msgs.msg import Image
 from simretina import retina
@@ -14,22 +14,23 @@ curr_frame = 0
 
 bridge = CvBridge()
 
-eye = retina.init_retina((50, 100))
 # 10+ parameters here...
 # See http://docs.opencv.org/3.1.0/dc/d54/classcv_1_1bioinspired_1_1Retina.html#ac6d6767e14212b5ebd7c5bbc6477fa7a
-eye.setupOPLandIPLParvoChannel(colorMode=False)
-eye.setupIPLMagnoChannel(parasolCells_beta=100.,
-                         parasolCells_tau=1.,
-                         parasolCells_k=10.,
-                         amacrinCellsTemporalCutFrequency=2.,
-                         # V0CompressionParameter=0.95,
-                         # localAdaptintegration_tau=,
-                         # localAdaptintegration_k=
-                         )
+eye = retina.init_retina((50, 100))
+eye.setupOPLandIPLParvoChannel()
+eye.setupIPLMagnoChannel(
+    parasolCells_beta=100.,
+    parasolCells_tau=1.,
+    parasolCells_k=10.,
+    amacrinCellsTemporalCutFrequency=2.,
+    # V0CompressionParameter=0.95,
+    # localAdaptintegration_tau=,
+    # localAdaptintegration_k=
+)
 
 
 def process_image(ros_image):
-    global curr, video, bridge
+    global curr_frame, video, bridge
 
     try:
         frame = bridge.imgmsg_to_cv2(ros_image)
@@ -41,9 +42,9 @@ def process_image(ros_image):
 
     # Collect frames and save them as a .npy file.
     if RECORD_VIDEO:
-        video[curr] = frame
-        curr += 1
-        if curr + 1 >= NUM_FRAMES:
+        video[curr_frame] = frame
+        curr_frame += 1
+        if curr_frame + 1 >= NUM_FRAMES:
             np.save('driving_video', video)
             sys.exit(0)
 
