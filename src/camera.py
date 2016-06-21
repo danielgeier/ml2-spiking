@@ -31,7 +31,8 @@ class CameraNode:
             buff_size=65536 * 3
         )
 
-        self.pub = rospy.Publisher("/dvs/events", Image, queue_size=1)
+        self.pub_raw = rospy.Publisher("/spiky/raw_image", Image, queue_size=1)
+        self.pub_retina = rospy.Publisher("/spiky/retina_image", Image, queue_size=1)
 
     def process_image(self, ros_image):
         try:
@@ -45,8 +46,10 @@ class CameraNode:
         self.eye.run(gray)
         magno_frame = self.eye.getMagno()
 
-        image_message = self.bridge.cv2_to_imgmsg(magno_frame, encoding="passthrough")
-        self.pub.publish(image_message)
+        image_message_raw = self.bridge.cv2_to_imgmsg(gray, encoding="passthrough")
+        image_message_retina = self.bridge.cv2_to_imgmsg(magno_frame, encoding="passthrough")
+        self.pub_raw.publish(image_message_raw)
+        self.pub_retina.publish(image_message_retina)
 
     def shutdown(self):
         pass

@@ -18,11 +18,11 @@ class SpikingNetworkNode:
         self.node_name = 'spiking_neuralnet'
         rospy.init_node(self.node_name, disable_signals=True)
         self.bridge = CvBridge()
-        self.sub = rospy.Subscriber('/dvs/events', Image, self.save_frame)
+        self.sub = rospy.Subscriber('/spiky/raw_image', Image, self.save_frame)
         self.pub = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
         self.last_frame = None
         # Make sure we get at least one frame
-        rospy.wait_for_message('/dvs/events', Image)
+        rospy.wait_for_message('/spiky/raw_image', Image)
         # Make sure it is grayscale
         assert len(self.last_frame.shape) == 2
 
@@ -46,7 +46,7 @@ class SpikingNetwork:
         self.pop_in_r = Population(num_neurons // 2, IF_curr_alpha, {'i_offset': np.zeros(num_neurons // 2)})
 
         # layer 2 links
-        self.pop_in_l2 = Population(4, IF_curr_alpha, {'i_offset': np.zeros(4), 'v_thresh': 10})
+        self.pop_in_l2 = Population(4, IF_curr_alpha, {'i_offset': np.zeros(4), 'v_thresh': 100})
         conn_list_l = []
         for neuron in self.pop_in_l:
             neuron = neuron - self.pop_in_l.first_id
@@ -63,7 +63,7 @@ class SpikingNetwork:
                 conn_list_l.append((neuron, 3, 1.0, 0.1))
 
         # layer2 rechts
-        self.pop_in_r2 = Population(4, IF_curr_alpha, {'i_offset': np.zeros(4), 'v_thresh': 10})
+        self.pop_in_r2 = Population(4, IF_curr_alpha, {'i_offset': np.zeros(4), 'v_thresh': 100})
         conn_list_r = []
         for neuron in self.pop_in_r:
             neuron = neuron - self.pop_in_r.first_id
@@ -104,6 +104,17 @@ class SpikingNetwork:
         self.pop_out_l.record('spikes')
         self.pop_out_r.record('spikes')
 
+
+        #net2 for STDP
+
+        self.pop_learning_mid = Population(4, IF_curr_alpha, {'i_offset': np.zeros(4)})
+        self.pop_learning_out = Population(2, IF_curr_alpha, {'i_offset': np.zeros(2)})
+
+        projection_in_links = Projection(self.pop_learning_mid, self.pop_out_l, AllToAllConnector())
+        projection_in_rechts = Projection(self.pop_learning_mid, self.pop_out_r, AllToAllConnector())
+        projection_learning_out = Projection(self.pop_learning_out, self.pop_learning_mid, AllToAllConnector())
+
+
     def inject(self, frame):
         frame_l = frame[0:50, 0:50]
         frame_r = frame[0:50, 50:100]
@@ -128,7 +139,7 @@ class SpikingNetwork:
         # TODO ensure -1 <= angle <= 1
         angle = num_spikes_diff / 30
         brake = 0  # np.exp(abs(angle)) - 1
-        gas = 1 / (abs(angle) + 1)
+        gas = 1 / (abs(angle) + 1.5)
         print(
             'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f}'.format(
                 num_spikes_l,
