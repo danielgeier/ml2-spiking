@@ -97,15 +97,12 @@ class SpikingNetwork:
         projection_out_l.setWeights(1.0)
         projection_out_r.setWeights(1.0)
 
-        self.pop_in_l.record('spikes')
-        self.pop_in_r.record('spikes')
-        self.pop_in_l2.record('spikes')
-        self.pop_in_r2.record('spikes')
-        self.pop_out_l.record('spikes')
-        self.pop_out_r.record('spikes')
+        self.spikedetector_left = nest.nest.Create('spike_detector')
+        self.spikedetector_right = nest.nest.Create('spike_detector')
+        nest.nest.Connect(self.pop_out_l[0], self.spikedetector_left[0])
+        nest.nest.Connect(self.pop_out_r[0], self.spikedetector_right[0])
 
-
-        #net2 for STDP
+        # net2 for STDP
 
         self.pop_learning_mid = Population(4, IF_curr_alpha, {'i_offset': np.zeros(4)})
         self.pop_learning_out = Population(2, IF_curr_alpha, {'i_offset': np.zeros(2)})
@@ -113,7 +110,6 @@ class SpikingNetwork:
         projection_in_links = Projection(self.pop_learning_mid, self.pop_out_l, AllToAllConnector())
         projection_in_rechts = Projection(self.pop_learning_mid, self.pop_out_r, AllToAllConnector())
         projection_learning_out = Projection(self.pop_learning_out, self.pop_learning_mid, AllToAllConnector())
-
 
     def inject(self, frame):
         frame_l = frame[0:50, 0:50]
@@ -124,17 +120,13 @@ class SpikingNetwork:
 
         tstop = 50.0
         nest.run(tstop)
-
-        data_out_l = self.pop_out_l.get_data()
-        data_out_r = self.pop_out_r.get_data()
-
         nest.end()
 
-        num_spikes_l = data_out_l.segments[0].spiketrains[0].size - self.sum_spikes_l
-        num_spikes_r = data_out_r.segments[0].spiketrains[0].size - self.sum_spikes_r
+        num_spikes_l = nest.nest.GetStatus(self.spikedetector_left, "n_events")[0]
+        num_spikes_r = nest.nest.GetStatus(self.spikedetector_right, "n_events")[0]
+        nest.nest.SetStatus(self.spikedetector_left, "n_events", 0)
+        nest.nest.SetStatus(self.spikedetector_right, "n_events", 0)
 
-        self.sum_spikes_l += num_spikes_l
-        self.sum_spikes_r += num_spikes_r
         num_spikes_diff = num_spikes_l - num_spikes_r
         # TODO ensure -1 <= angle <= 1
         angle = num_spikes_diff / 30
