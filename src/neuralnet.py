@@ -35,7 +35,7 @@ class SpikingNetworkNode:
 
 class SpikingNetwork:
     def __init__(self, width, height):
-        nest.setup(timestep=0.1, threads=6)
+        nest.setup(timestep=0.1)
 
         num_neurons = width * height
 
@@ -118,7 +118,7 @@ class SpikingNetwork:
         self.pop_in_l.set(i_offset=frame_l.astype(float).flatten())
         self.pop_in_r.set(i_offset=frame_r.astype(float).flatten())
 
-        tstop = 50.0
+        tstop = 20.0
         nest.run(tstop)
         nest.end()
 
@@ -129,7 +129,7 @@ class SpikingNetwork:
 
         num_spikes_diff = num_spikes_l - num_spikes_r
         # TODO ensure -1 <= angle <= 1
-        angle = num_spikes_diff / 30
+        angle = num_spikes_diff / 15
         brake = 0  # np.exp(abs(angle)) - 1
         gas = 1 / (abs(angle) + 1.5)
         print(
