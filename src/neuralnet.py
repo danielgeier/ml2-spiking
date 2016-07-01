@@ -18,11 +18,11 @@ class SpikingNetworkNode:
         self.node_name = 'spiking_neuralnet'
         rospy.init_node(self.node_name, disable_signals=True)
         self.bridge = CvBridge()
-        self.sub = rospy.Subscriber('/spiky/raw_image', Image, self.save_frame)
+        self.sub = rospy.Subscriber('/spiky/retina_image', Image, self.save_frame)
         self.pub = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
         self.last_frame = None
         # Make sure we get at least one frame
-        rospy.wait_for_message('/spiky/raw_image', Image)
+        rospy.wait_for_message('/spiky/retina_image', Image)
         # Make sure it is grayscale
         assert len(self.last_frame.shape) == 2
 
