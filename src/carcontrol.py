@@ -1,5 +1,7 @@
 import rospy
+import time
 from geometry_msgs.msg import Pose, Point, Quaternion, Vector3
+from std_msgs.msg import String
 
 STARTING_POSE = Pose(Point(0.00338126594668, -2.74352205099, 0.449979358999),
                      Quaternion(-4.21134441427e-07, 5.90477668767e-05, -0.00338638200865,
@@ -11,19 +13,34 @@ class CarControlNode:
 
     def __init__(self):
         self.node_name = 'spiking_carcontrol'
+        self.distance = None
+        self.oldsec = time.time()
         # Disable signals so PyCharm's rerun button works
         rospy.init_node(self.node_name, disable_signals=True)
 
-        self.sub_carPose = rospy.Subscriber('/AADC_AudiTT/carPose', Pose, self.set_car_back)
+        self.sub_carPose = rospy.Subscriber('/AADC_AudiTT/carPose', Pose, self.car_of_map)
+        self.sub_carDist = rospy.Subscriber('/AADC_AudiTT/DistanceOneCrossing',String, self.get_distance)
         self.pub_carUpdate = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
         self.pub = rospy.Publisher('/AADC_AudiTT/carPoseSet', Pose, queue_size=1)
 
-    def set_car_back(self, pose):
+    def get_distance(self, string):
+        self.distance = float(string.data)
+        self.car_of_lane()
+
+    def car_of_map(self, pose):
         if pose.position.z < 0.44:
             self.reset_car_pose()
 
+    def car_of_lane(self):
+        if self.distance <= 1.:
+            self.oldsec = time.time()
+        newsec = time.time()
+        if newsec - self.oldsec >= 2:
+            self.reset_car_pose()
+            self.oldsec = time.time()
+
     def reset_car_pose(self):
-        print 'isch runnergfalle'
+        print 'isch runnergfalle oder zu lang wegg'
         self.pub.publish(STARTING_POSE)
         self.pub_carUpdate.publish(STARTING_ARGS)
 
