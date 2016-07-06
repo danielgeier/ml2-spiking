@@ -6,6 +6,10 @@ from std_msgs.msg import String
 STARTING_POSE = Pose(Point(0.00338126594668, -2.74352205099, 0.449979358999),
                      Quaternion(-4.21134441427e-07, 5.90477668767e-05, -0.00338638200865,
                                 0.999994264449))
+STARTING_POSE_T = Pose(Point(0.070287314053, 2.4954730954, 0.449979358999),
+                     Quaternion(-4.21134441427e-07, 5.90477668767e-05, -0.00338638200865,
+                                0.999994264449))
+
 STARTING_ARGS = Vector3(0.0,0.0,0.0)
 
 class CarControlNode:
@@ -41,7 +45,8 @@ class CarControlNode:
 
     def reset_car_pose(self):
         print 'isch runnergfalle oder zu lang wegg'
-        self.pub.publish(STARTING_POSE)
+        #change in Starting_pose when using one- or nocrossing
+        self.pub.publish(STARTING_POSE_T)
         self.pub_carUpdate.publish(STARTING_ARGS)
 
     def reset_car_update(self):
