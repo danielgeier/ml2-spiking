@@ -10,6 +10,8 @@ from pyNN.nest import Population, AllToAllConnector, FromListConnector, IF_curr_
 from pyNN.nest.projections import Projection
 from sensor_msgs.msg import Image
 
+NUM_MIDDLE_LEARNING_LAYER = 5
+
 
 class SpikingNetworkNode:
     """Get retina images and store them. Publish to Gazebo."""
@@ -85,17 +87,17 @@ class SpikingNetwork:
 
         # Connections
 
-        projection_layer2_l = Projection(self.pop_in_l, self.pop_in_l2, FromListConnector(conn_list_l))
-        projection_layer2_r = Projection(self.pop_in_r, self.pop_in_r2, FromListConnector(conn_list_r))
+        self.projection_layer2_l = Projection(self.pop_in_l, self.pop_in_l2, FromListConnector(conn_list_l))
+        self.projection_layer2_r = Projection(self.pop_in_r, self.pop_in_r2, FromListConnector(conn_list_r))
 
-        projection_layer2_l.setWeights(1.0)
-        projection_layer2_r.setWeights(1.0)
+        self.projection_layer2_l.setWeights(1.0)
+        self.projection_layer2_r.setWeights(1.0)
 
-        projection_out_l = Projection(self.pop_in_l2, self.pop_out_l, AllToAllConnector())
-        projection_out_r = Projection(self.pop_in_r2, self.pop_out_r, AllToAllConnector())
+        self.projection_out_l = Projection(self.pop_in_l2, self.pop_out_l, AllToAllConnector())
+        self.projection_out_r = Projection(self.pop_in_r2, self.pop_out_r, AllToAllConnector())
 
-        projection_out_l.setWeights(1.0)
-        projection_out_r.setWeights(1.0)
+        self.projection_out_l.setWeights(1.0)
+        self.projection_out_r.setWeights(1.0)
 
         self.spikedetector_left = nest.nest.Create('spike_detector')
         self.spikedetector_right = nest.nest.Create('spike_detector')
@@ -104,12 +106,12 @@ class SpikingNetwork:
 
         # net2 for STDP
 
-        self.pop_learning_mid = Population(4, IF_curr_alpha, {'i_offset': np.zeros(4)})
+        self.pop_learning_mid = Population(NUM_MIDDLE_LEARNING_LAYER, IF_curr_alpha, {'i_offset': np.zeros(NUM_MIDDLE_LEARNING_LAYER)})
         self.pop_learning_out = Population(2, IF_curr_alpha, {'i_offset': np.zeros(2)})
 
-        projection_in_links = Projection(self.pop_learning_mid, self.pop_out_l, AllToAllConnector())
-        projection_in_rechts = Projection(self.pop_learning_mid, self.pop_out_r, AllToAllConnector())
-        projection_learning_out = Projection(self.pop_learning_out, self.pop_learning_mid, AllToAllConnector())
+        self.projection_in_links = Projection(self.pop_learning_mid, self.pop_out_l, AllToAllConnector())
+        self.projection_in_rechts = Projection(self.pop_learning_mid, self.pop_out_r, AllToAllConnector())
+        self.projection_learning_out = Projection(self.pop_learning_out, self.pop_learning_mid, AllToAllConnector())
 
     def inject(self, frame):
         frame_l = frame[0:50, 0:50]
@@ -132,15 +134,13 @@ class SpikingNetwork:
         angle = num_spikes_diff / 15
         brake = 0  # np.exp(abs(angle)) - 1
         gas = 1 / (abs(angle) + 1.5)
-        print(
-            'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f}'.format(
-                num_spikes_l,
-                num_spikes_r,
-                num_spikes_diff,
-                gas,
-                brake,
-                angle)
-        )
+        print 'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f}'.format(
+            num_spikes_l,
+            num_spikes_r,
+            num_spikes_diff,
+            gas,
+            brake,
+            angle)
 
         return gas, brake, angle
 
