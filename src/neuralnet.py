@@ -8,6 +8,7 @@ from geometry_msgs.msg import Vector3
 from pyNN import nest
 from pyNN.nest import Population, AllToAllConnector, FromListConnector, IF_curr_alpha
 from pyNN.nest.projections import Projection
+from pyNN.random import RandomDistribution
 from sensor_msgs.msg import Image
 
 NUM_MIDDLE_LEARNING_LAYER = 5
@@ -104,7 +105,7 @@ class SpikingNetwork:
         nest.nest.Connect(self.pop_out_l[0], self.spikedetector_left[0])
         nest.nest.Connect(self.pop_out_r[0], self.spikedetector_right[0])
 
-        # net2 for STDP
+        # net2 for Learning
 
         self.pop_learning_mid = Population(NUM_MIDDLE_LEARNING_LAYER, IF_curr_alpha, {'i_offset': np.zeros(NUM_MIDDLE_LEARNING_LAYER)})
         self.pop_learning_out = Population(2, IF_curr_alpha, {'i_offset': np.zeros(2)})
@@ -113,6 +114,43 @@ class SpikingNetwork:
         self.projection_in_rechts = Projection(self.pop_learning_mid, self.pop_out_r, AllToAllConnector())
         self.projection_learning_out = Projection(self.pop_learning_out, self.pop_learning_mid, AllToAllConnector())
 
+
+        self.spikedetector_l_out = np.ndarray(2,dtype='int32')
+        for i in range(2):
+            self.spikedetector_l_out[i] = nest.nest.Create('spike_detector')[0]
+            nest.nest.Connect(self.pop_learning_out[i], self.spikedetector_l_out[i])
+
+        self.spikedetector_l_mid = np.ndarray(NUM_MIDDLE_LEARNING_LAYER,dtype='int32')
+        for i in range(NUM_MIDDLE_LEARNING_LAYER):
+            self.spikedetector_l_mid[i] = nest.nest.Create('spike_detector')[0]
+            nest.nest.Connect(self.pop_learning_mid[i], self.spikedetector_l_mid[i])
+
+        vthresh_distr = RandomDistribution('uniform', [0.00001, 0.0001])
+        print vthresh_distr
+
+        self.projection_in_links.setWeights(vthresh_distr)
+        self.projection_in_rechts.setWeights(vthresh_distr)
+        self.projection_learning_out.setWeights(vthresh_distr)
+
+        print self.projection_in_links.getWeights()
+
+        in_out_neurons = 4
+        elig = np.zeros((NUM_MIDDLE_LEARNING_LAYER,in_out_neurons))
+
+        count = 0
+        for neuron in self.pop_learning_mid:
+            source_con =  nest.nest.GetConnections(source=[neuron])
+            target_con =  nest.nest.GetConnections(target=[neuron])
+
+            elig[count][0] = nest.nest.GetStatus(source_con, 'weight')[1]   #1 bzw 2 wegen verbindung zum spikedetector
+            elig[count][1] = nest.nest.GetStatus(source_con, 'weight')[2]
+            elig[count][2] = nest.nest.GetStatus(target_con, 'weight')[0]
+            elig[count][3] = nest.nest.GetStatus(target_con, 'weight')[1]
+            count = count+1
+
+        print elig
+
+
     def inject(self, frame):
         frame_l = frame[0:50, 0:50]
         frame_r = frame[0:50, 50:100]
@@ -120,7 +158,7 @@ class SpikingNetwork:
         self.pop_in_l.set(i_offset=frame_l.astype(float).flatten())
         self.pop_in_r.set(i_offset=frame_r.astype(float).flatten())
 
-        tstop = 20.0
+        tstop = 20.0 #
         nest.run(tstop)
         nest.end()
 
