@@ -12,7 +12,7 @@ from pyNN.random import RandomDistribution
 from sensor_msgs.msg import Image
 
 NUM_MIDDLE_LEARNING_LAYER = 5
-
+NUM_INOUT_LEARNING_LAYER = 4
 
 class SpikingNetworkNode:
     """Get retina images and store them. Publish to Gazebo."""
@@ -125,7 +125,8 @@ class SpikingNetwork:
             self.spikedetector_l_mid[i] = nest.nest.Create('spike_detector')[0]
             nest.nest.Connect(self.pop_learning_mid[i], self.spikedetector_l_mid[i])
 
-        vthresh_distr = RandomDistribution('uniform', [0.00001, 0.0001])
+
+        vthresh_distr = RandomDistribution('uniform', [0.1, 1])
         print vthresh_distr
 
         self.projection_in_links.setWeights(vthresh_distr)
@@ -134,8 +135,7 @@ class SpikingNetwork:
 
         print self.projection_in_links.getWeights()
 
-        in_out_neurons = 4
-        elig = np.zeros((NUM_MIDDLE_LEARNING_LAYER,in_out_neurons))
+        elig = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_INOUT_LEARNING_LAYER))
 
         count = 0
         for neuron in self.pop_learning_mid:
@@ -161,6 +161,20 @@ class SpikingNetwork:
         tstop = 20.0 #
         nest.run(tstop)
         nest.end()
+
+
+        spikes_array = np.ndarray((NUM_MIDDLE_LEARNING_LAYER+NUM_INOUT_LEARNING_LAYER),dtype='int32')
+        spikes_array[0] = 1 if (nest.nest.GetStatus(self.spikedetector_left, 'n_events')[0] >= 1) else 0
+        spikes_array[1] = 1 if (nest.nest.GetStatus(self.spikedetector_right, 'n_events')[0] >= 1) else 0
+        spikes_array[2] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[0]], 'n_events')[0] >= 1) else 0
+        spikes_array[3] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[1]], 'n_events')[0] >= 1) else 0
+        spikes_array[4] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[2]], 'n_events')[0] >= 1) else 0
+        spikes_array[5] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[3]], 'n_events')[0] >= 1) else 0
+        spikes_array[6] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[4]], 'n_events')[0] >= 1) else 0
+        spikes_array[7] = 1 if (nest.nest.GetStatus([self.spikedetector_l_out[0]], 'n_events')[0] >= 1) else 0
+        spikes_array[8] = 1 if (nest.nest.GetStatus([self.spikedetector_l_out[1]], 'n_events')[0] >= 1) else 0
+
+        print spikes_array
 
         num_spikes_l = nest.nest.GetStatus(self.spikedetector_left, "n_events")[0]
         num_spikes_r = nest.nest.GetStatus(self.spikedetector_right, "n_events")[0]
