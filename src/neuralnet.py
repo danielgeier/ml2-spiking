@@ -11,8 +11,20 @@ from pyNN.nest.projections import Projection
 from pyNN.random import RandomDistribution
 from sensor_msgs.msg import Image
 
+
 NUM_MIDDLE_LEARNING_LAYER = 5
 NUM_INOUT_LEARNING_LAYER = 4
+
+TIME_STEP = 0.2 # ?
+
+# Parameters for reinforcement learning
+NUM_TRACE_STEPS = 5 # TODO better name
+LEARNING_RATE = 0.01
+DISCOUNT_FACTOR = 0.5
+TAU = 5
+BETA_SIGMA = 0.5  # ?
+SIGMA = 0.001
+
 
 class SpikingNetworkNode:
     """Get retina images and store them. Publish to Gazebo."""
@@ -38,6 +50,10 @@ class SpikingNetworkNode:
 
 class SpikingNetwork:
     def __init__(self, width, height):
+        # Most recent time step is in last array position
+        # Neurons in row, spikes for current time step in column
+        self.spikes = np.zeros((NUM_MIDDLE_LEARNING_LAYER + NUM_INOUT_LEARNING_LAYER, NUM_TRACE_STEPS),
+                               dtype='int32')
         nest.setup(timestep=0.1)
 
         num_neurons = width * height
@@ -135,20 +151,20 @@ class SpikingNetwork:
 
         print self.projection_in_links.getWeights()
 
-        elig = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_INOUT_LEARNING_LAYER))
+        weights = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_INOUT_LEARNING_LAYER))
 
         count = 0
         for neuron in self.pop_learning_mid:
             source_con =  nest.nest.GetConnections(source=[neuron])
             target_con =  nest.nest.GetConnections(target=[neuron])
 
-            elig[count][0] = nest.nest.GetStatus(source_con, 'weight')[1]   #1 bzw 2 wegen verbindung zum spikedetector
-            elig[count][1] = nest.nest.GetStatus(source_con, 'weight')[2]
-            elig[count][2] = nest.nest.GetStatus(target_con, 'weight')[0]
-            elig[count][3] = nest.nest.GetStatus(target_con, 'weight')[1]
+            weights[count][0] = nest.nest.GetStatus(source_con, 'weight')[1]   #1 bzw 2 wegen verbindung zum spikedetector
+            weights[count][1] = nest.nest.GetStatus(source_con, 'weight')[2]
+            weights[count][2] = nest.nest.GetStatus(target_con, 'weight')[0]
+            weights[count][3] = nest.nest.GetStatus(target_con, 'weight')[1]
             count = count+1
 
-        print elig
+        print weights
 
 
     def inject(self, frame):
@@ -163,18 +179,19 @@ class SpikingNetwork:
         nest.end()
 
 
-        spikes_array = np.ndarray((NUM_MIDDLE_LEARNING_LAYER+NUM_INOUT_LEARNING_LAYER),dtype='int32')
-        spikes_array[0] = 1 if (nest.nest.GetStatus(self.spikedetector_left, 'n_events')[0] >= 1) else 0
-        spikes_array[1] = 1 if (nest.nest.GetStatus(self.spikedetector_right, 'n_events')[0] >= 1) else 0
-        spikes_array[2] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[0]], 'n_events')[0] >= 1) else 0
-        spikes_array[3] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[1]], 'n_events')[0] >= 1) else 0
-        spikes_array[4] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[2]], 'n_events')[0] >= 1) else 0
-        spikes_array[5] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[3]], 'n_events')[0] >= 1) else 0
-        spikes_array[6] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[4]], 'n_events')[0] >= 1) else 0
-        spikes_array[7] = 1 if (nest.nest.GetStatus([self.spikedetector_l_out[0]], 'n_events')[0] >= 1) else 0
-        spikes_array[8] = 1 if (nest.nest.GetStatus([self.spikedetector_l_out[1]], 'n_events')[0] >= 1) else 0
 
-        print spikes_array
+        self.spikes[0][0] = 1 if (nest.nest.GetStatus(self.spikedetector_left, 'n_events')[0] >= 1) else 0
+        self.spikes[1][0] = 1 if (nest.nest.GetStatus(self.spikedetector_right, 'n_events')[0] >= 1) else 0
+        self.spikes[2][0] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[0]], 'n_events')[0] >= 1) else 0
+        self.spikes[3][0] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[1]], 'n_events')[0] >= 1) else 0
+        self.spikes[4][0] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[2]], 'n_events')[0] >= 1) else 0
+        self.spikes[5][0] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[3]], 'n_events')[0] >= 1) else 0
+        self.spikes[6][0] = 1 if (nest.nest.GetStatus([self.spikedetector_l_mid[4]], 'n_events')[0] >= 1) else 0
+        self.spikes[7][0] = 1 if (nest.nest.GetStatus([self.spikedetector_l_out[0]], 'n_events')[0] >= 1) else 0
+        self.spikes[8][0] = 1 if (nest.nest.GetStatus([self.spikedetector_l_out[1]], 'n_events')[0] >= 1) else 0
+        np.roll(self.spikes, -1, axis=1)
+
+       # print spikes_array
 
         num_spikes_l = nest.nest.GetStatus(self.spikedetector_left, "n_events")[0]
         num_spikes_r = nest.nest.GetStatus(self.spikedetector_right, "n_events")[0]
@@ -196,6 +213,48 @@ class SpikingNetwork:
 
         return gas, brake, angle
 
+
+    def calc_reward(self):
+        return 1.
+
+
+    def update_weights(self):
+        # FIXME remove
+        eligibility_traces = np.ones((5, 5, NUM_TRACE_STEPS))
+        weights = np.zeros((50, 100))
+
+        change_elig = calc_eligibility_change()
+        eligibility_traces *= DISCOUNT_FACTOR
+        eligibility_traces += change_elig
+
+        # Update weights
+        reward = calc_reward()
+        weights += LEARNING_RATE * reward * eligibility_traces
+
+
+    def calc_eligibility_change(self):
+        # FIXME remove
+        eligibility_traces = np.ones((5, 5, NUM_TRACE_STEPS))
+        # spikes = np.asarray(
+        #     [[1, 0, 0, 1, 1],
+        #      [0, 1, 1, 0, 1],
+        #      [1, 0, 0, 1, 1],
+        #      [0, 1, 1, 0, 1],
+        #      [1, 1, 1, 1, 1]])  # f_i bzw f_j
+
+        # Dimensions:              i*j*t                 j*t      t
+        change_elig = np.ones_like(eligibility_traces) * self.spikes * np.exp(-np.arange(NUM_TRACE_STEPS) * TIME_STEP / TAU)
+        change_elig = np.sum(change_elig, axis=0)
+
+        # Presynaptic spikes from current time step
+        presynaptic_spikes = np.tile(self.spikes[-1], (5, 1))
+        # FIXME check if there actually is a connection between neurons
+
+        change_elig[presynaptic_spikes == 1] *= BETA_SIGMA
+        change_elig[presynaptic_spikes == 0] *= -BETA_SIGMA * SIGMA / (1 - SIGMA)
+
+
+        return change_elig
 
 def main():
     node = SpikingNetworkNode()
