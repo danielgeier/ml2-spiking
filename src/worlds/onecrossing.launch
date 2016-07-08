@@ -1,0 +1,15 @@
+<launch>
+
+  
+  <arg name="gzname" default="gazebo"/>
+  <arg name="gzworld" value="/disk/users/mlprak2/lea_fabian/ml2-spiking/src/worlds/onecrossing.world"/>
+  <arg name="extra_gazebo_args" value="--verbose"/>
+  <param name="/use_sim_time" type="bool" value="true"/>
+  
+  <node name="gazebo" pkg="gazebo_ros" type="gazebo" args="$(arg gzworld) $(arg extra_gazebo_args)" output="screen"/>
+  <node name="onecrossing_lanelet" pkg="vehicle_control" type="onecrossing_lanelet" output="screen"/>
+
+  <include file="$(find cvs_gazebo)/launch/kog_auto_1516_essential.launch" />
+  <include file="$(find cvs_gazebo)/launch/kog_auto_1516_g25.launch" />
+  
+</launch>
