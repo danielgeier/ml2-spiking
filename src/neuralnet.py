@@ -63,6 +63,11 @@ class SpikingNetworkNode:
 
 class SpikingNetwork:
     def __init__(self, width, height):
+        # Most recent time step is in last array position
+        # Neurons in row, spikes for current time step in column
+        #TODO: safe spikesarray from inject here
+        self.spikes = np.zeros((NUM_MIDDLE_LEARNING_LAYER + NUM_INOUT_LEARNING_LAYER, NUM_TRACE_STEPS),
+                               dtype='int32')
         nest.setup(timestep=0.1)
 
         num_neurons = width * height
@@ -169,10 +174,6 @@ class SpikingNetwork:
         count = 0
         for neuron in self.pop_learning_mid:
             target_con =  nest.nest.GetConnections(target=[neuron])
-        #   source_con =  nest.nest.GetConnections(target=[neuron])
-
-          #  elig[count][0] = nest.nest.GetStatus(source_con, 'weight')[0]   #1 bzw 2 wegen verbindung zum spikedetector
-          #  elig[count][1] = nest.nest.GetStatus(source_con, 'weight')[1]
             weights[count] = nest.nest.GetStatus(target_con, 'weight')
 
             count += 1
