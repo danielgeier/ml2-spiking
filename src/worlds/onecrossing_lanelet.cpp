@@ -7,6 +7,7 @@
 #include <sstream>
 #include "std_msgs/String.h"
 
+namespace _deprecated {
 
 geometry_msgs::Point lastPos;
 geometry_msgs::Quaternion lastQuat;
@@ -65,6 +66,7 @@ int main(int argc, char **argv)
   double MAX_DISTANCE = 100.0;
   LLet::point_with_id_t reference_point(boost::make_tuple(0.0, 0.0, -1));
 
+  /// TODO: Possibly better to create a node that indicates the .osm-File to open
   std::string fileName = "/disk/users/mlprak2/lea_fabian/ml2-spiking/src/worlds/onecrossing_lanelet.osm"; //use an appropriate .osm file
   LLet::LaneletMap llmap(fileName);
 
@@ -93,7 +95,7 @@ int main(int argc, char **argv)
       current_location = transformPointToGPS(lastPos, reference_point);
 
       // Try to find lanelet closest to our current location within a maximum distance.
-      LLet::lanelet_ptr_t llnet = NULL;
+      LLet::lanelet_ptr_t llnet;
       llmap.map_matching(current_location, llnet, MAX_DISTANCE);
 
       if (llnet != NULL)
@@ -106,7 +108,9 @@ int main(int argc, char **argv)
         distance = llnet->distance_to(current_location);
         ROS_INFO_STREAM("DISTANCE TO LANELET: " << distance);
         bool isCovered = llnet->covers_point(current_location);
-        ROS_INFO_STREAM("LANELET COVERS CURRENT LOCATION " << isCovered);
+        ROS_INFO_STREAM("LANELET COVERS CURRENT LOCATION " << isCovered);        
+        float angle = 0.0;
+        ROS_INFO_STREAM("ANGLE TO LANELET: " << angle);
         strs.str("");
         strs << distance;
       }
@@ -127,4 +131,5 @@ int main(int argc, char **argv)
   }
 
   return 0;
+}
 }

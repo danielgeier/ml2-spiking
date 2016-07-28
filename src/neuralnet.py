@@ -3,22 +3,23 @@ from __future__ import division
 import cv2
 import numpy as np
 import rospy
+
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Vector3
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 from pyNN import nest
 from pyNN.nest import Population, AllToAllConnector, FromListConnector, IF_curr_alpha
 from pyNN.nest.projections import Projection
 from pyNN.random import RandomDistribution
 from sensor_msgs.msg import Image
+import time
 
 NUM_IN_LEARNING_LAYER = 2
-NUM_MIDDLE_LEARNING_LAYER = 5
+NUM_MIDDLE_LEARNING_LAYER = 50
 NUM_OUT_LEARNING_LAYER = 2
 NUM_RL_NEURONS = NUM_MIDDLE_LEARNING_LAYER + NUM_OUT_LEARNING_LAYER
 
-TIME_STEP = 0.2 # ?
-NUM_MIDDLE_LEARNING_LAYER = 5
+TIME_STEP = 0.1 # ?
 
 # Parameters for reinforcement learning
 LEARNING_RATE = 0.01
@@ -35,14 +36,14 @@ class SpikingNetworkNode:
     def __init__(self):
         # Most recent time step is in last array position
         # Neurons in row, spikes for current time step in column
-        self.spikes = np.zeros((NUM_IN_LEARNING_LAYER + NUM_RL_NEURONS, NUM_TRACE_STEPS),
-                               dtype='int32')
+        #self.spikes = np.zeros((NUM_IN_LEARNING_LAYER + NUM_RL_NEURONS, NUM_TRACE_STEPS),dtype='int32')
         self.node_name = 'spiking_neuralnet'
-
+        self.is_set_back = None
         rospy.init_node(self.node_name, disable_signals=True)
         self.bridge = CvBridge()
         self.sub = rospy.Subscriber('/spiky/retina_image', Image, self.save_frame)
         self.sub_lanelet = rospy.Subscriber('/AADC_AudiTT/DistanceOneCrossing', String, self.save_distance)
+        self.sub_is_set_back = rospy.Subscriber('/AADC_AudiTT/isSetBack', Bool, self.set_param_back)
         self.pub = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
         self.last_frame = None
         self.last_distance = None
@@ -58,18 +59,20 @@ class SpikingNetworkNode:
         self.pub.publish(gas, brake, steering_angle)
 
     def save_distance(self, distance_string):
-        self.last_distance =  float(distance_string)
+        self.last_distance =  float(distance_string.data)
+
+    def set_param_back(self, isSetBack):
+        self.is_set_back = isSetBack.data
 
 
 class SpikingNetwork:
     def __init__(self, width, height):
         # Most recent time step is in last array position
         # Neurons in row, spikes for current time step in column
-        #TODO: safe spikesarray from inject here
-        self.spikes = np.zeros((NUM_MIDDLE_LEARNING_LAYER + NUM_INOUT_LEARNING_LAYER, NUM_TRACE_STEPS),
-                               dtype='int32')
-        nest.setup(timestep=0.1)
-
+        self.spikes = np.zeros((NUM_RL_NEURONS, NUM_TRACE_STEPS), dtype='int32')
+        nest.setup(timestep=TIME_STEP)
+        self.eligibility_trace = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_OUT_LEARNING_LAYER))
+        self.weights = np.zeros((NUM_MIDDLE_LEARNING_LAYER, NUM_OUT_LEARNING_LAYER))
         num_neurons = width * height
 
         self.sum_spikes_l = 0
@@ -137,8 +140,8 @@ class SpikingNetwork:
 
         # net2 for Learning
 
-        self.pop_learning_mid = Population(NUM_MIDDLE_LEARNING_LAYER, IF_curr_alpha, {'i_offset': np.zeros(NUM_MIDDLE_LEARNING_LAYER)})#'v_thresh' : -64})
-        self.pop_learning_out = Population(2, IF_curr_alpha, {'i_offset': np.zeros(2)})
+        self.pop_learning_mid = Population(NUM_MIDDLE_LEARNING_LAYER, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(NUM_MIDDLE_LEARNING_LAYER)})#'v_thresh' : -64})
+        self.pop_learning_out = Population(2, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(2)})
 
         self.spikedetector_l_out = np.ndarray(2,dtype='int32')
         for i in range(2):
@@ -150,8 +153,9 @@ class SpikingNetwork:
             self.spikedetector_l_mid[i] = nest.nest.Create('spike_detector')[0]
             nest.nest.Connect(self.pop_learning_mid[i], self.spikedetector_l_mid[i])
 
-        self.all_detectors = np.append([self.spikedetector_left, self.spikedetector_right], self.spikedetector_l_mid)
-        self.all_detectors = np.append(self.all_detectors, self.spikedetector_l_out)
+        #self.all_detectors = np.append([self.spikedetector_left, self.spikedetector_right], self.spikedetector_l_mid)
+        #self.all_detectors = np.append(self.all_detectors, self.spikedetector_l_out)
+        self.all_detectors = np.append(self.spikedetector_l_mid,self.spikedetector_l_out)
         self.all_detectors = list(self.all_detectors)
 
         #Wertebereich in 10^3 mit uniform=[0.1 1] (why?)
@@ -169,16 +173,28 @@ class SpikingNetwork:
 
         print 'pynn',self.projection_in_links.getWeights()
 
-        weights = np.zeros((NUM_MIDDLE_LEARNING_LAYER, NUM_OUT_LEARNING_LAYER))
+
 
         count = 0
         for neuron in self.pop_learning_mid:
             target_con =  nest.nest.GetConnections(target=[neuron])
-            weights[count] = nest.nest.GetStatus(target_con, 'weight')
+            self.weights[count] = nest.nest.GetStatus(target_con, 'weight')
 
             count += 1
 
-        print weights
+        print self.weights
+
+    def calc_reward(self, distance):
+        #negative rewards doppelt gewichten
+        varianz = 0.2
+        mean = 0
+
+        #reward = ((1 / np.math.sqrt(2 * np.math.pi * varianz )) * np.math.exp(-1 * np.math.pow(distance - mean,2) / 2* varianz)) -0.5
+        reward =  -20 * distance**2 + 1
+        #reward = 0.5 - distance
+        reward = reward * 10 if reward < 0 else reward
+        return reward
+
 
     def inject(self, frame):
         frame_l = frame[0:50, 0:50]
@@ -193,17 +209,20 @@ class SpikingNetwork:
 
 
 
-        spikes_array = nest.nest.GetStatus(self.all_detectors, 'n_events')
+        self.spikes[:, 0] = nest.nest.GetStatus(self.all_detectors, 'n_events')
+
         nest.nest.SetStatus(self.all_detectors, 'n_events', 0)
 
-        print spikes_array
+        self.spikes = np.roll(self.spikes, -1, axis=1)
 
-        num_spikes_l = spikes_array[0]
-        num_spikes_r = spikes_array[1]
+        print 'spikes', self.spikes
+
+        num_spikes_l = self.spikes[-1,-1]
+        num_spikes_r = self.spikes[-2,-1]
 
         num_spikes_diff = num_spikes_l - num_spikes_r
         # TODO ensure -1 <= angle <= 1
-        angle = num_spikes_diff / 15
+        angle = num_spikes_diff / 10
         brake = 0  # np.exp(abs(angle)) - 1
         gas = 1 / (abs(angle) + 1.5)
         print 'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f}'.format(
@@ -216,19 +235,15 @@ class SpikingNetwork:
 
         return gas, brake, angle
 
-    def calc_reward(self, distance):
-        return 1 - distance
-
     def calc_eligibility_change(self):
         # Only check if neurons spiked or not
-        self.spikes_array = map(lambda x: 1 if x >= 1 else 0, self.spikes_array)
-        # In all calculations the dimensions are i, j and t, where 0 <= i, j < NUM_NEURONS and 0 <= t < NUM_TRACE_STEPS.
-        spikes = np.random.random_integers(0, 1, (NUM_RL_NEURONS, NUM_TRACE_STEPS)) # just for testing TODO remove
+        spikes = self.spikes.copy()
+        spikes[spikes >= 1] = 1
 
         # Arrange the NUM_NEURONS presynaptic spikes for each neuron at each time step (except last time step).
         presynaptic = np.tile(spikes[..., :-1], (NUM_RL_NEURONS, 1, 1))
         # Exponential decay factor for postsynaptic spikes
-        decay = np.exp(-np.arange(NUM_TRACE_STEPS - 1) * TIME_STEP / TAU)
+        decay = np.exp(-np.arange(NUM_TRACE_STEPS - 1) * TIME_STEP / TAU)[::-1]
         change_elig = presynaptic * decay
         # Sum over time. Calculate the weighted incoming presynaptic spikes at each neuron connection.
         change_elig = np.sum(change_elig, axis=2)
@@ -238,19 +253,26 @@ class SpikingNetwork:
         change_elig[postsynaptic == 1] *= BETA_SIGMA
         change_elig[postsynaptic == 0] *= -BETA_SIGMA * SIGMA / (1 - SIGMA)
 
-        return change_elig
+        return change_elig[0:NUM_MIDDLE_LEARNING_LAYER,NUM_MIDDLE_LEARNING_LAYER:NUM_RL_NEURONS]
         # change_elig[i, j] is now the eligibility trace change for the connection from i to j
         # TODO: check if actual connection exists
 
     def learn(self, last_distance):
 
-        reward = calc_reward(last_distance)
+        reward = self.calc_reward(last_distance)
 
-        eligibility_trace *= DISCOUNT_FACTOR
-        eligibility_trace += calc_eligibility_change()
+        self.eligibility_trace *= DISCOUNT_FACTOR
 
-        weights += LEARNING_RATE * reward * eligibility_trace
-        pass
+        self.eligibility_trace += self.calc_eligibility_change()
+
+        print 'weights:',self.weights
+        print 'elig:',self.eligibility_trace
+        print 'reward:',reward
+
+
+        self.weights += LEARNING_RATE * reward * self.eligibility_trace
+        self.projection_learning_out.setWeights(self.weights / 1000)
+
 
 
 def main():
@@ -260,20 +282,30 @@ def main():
     window = cv2.namedWindow('Cam', cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window, w * 4, h * 4)
 
-    try:
-        while True:
-            net.learn(node.last_distance)
-            frame = node.last_frame
-            gas, brake, angle = net.inject(frame)
+   # try:
+    while True:
+        net.learn(node.last_distance)
+        print node.is_set_back
+        if node.is_set_back:
+            net.spikes = np.zeros((NUM_RL_NEURONS, NUM_TRACE_STEPS), dtype='int32')
+            net.eligibility_trace = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_OUT_LEARNING_LAYER))
+            #Here: Every n minutes save new weights!
+            np.savetxt('/fzi/ids/mlprak2/no_backup/test_weights.out',net.weights)
+            node.is_set_back = False
+        cv2.imshow('weights',cv2.resize(net.weights / 1000 ,(0,0), fx=100, fy=10,interpolation=cv2.INTER_NEAREST))
+        frame = node.last_frame
+        gas, brake, angle = net.inject(frame)
+        frame2 = frame.copy()
+        frame2.T[50] = 255 - frame2.T[50]
+        cv2.imshow('Cam', frame2)
+        cv2.waitKey(1)
 
-            frame2 = frame.copy()
-            frame2.T[50] = 255 - frame2.T[50]
-            cv2.imshow('Cam', frame2)
-            cv2.waitKey(1)
+        node.publish(gas, brake, angle)
+    #except Exception, e:
+     #   print e
 
-            node.publish(gas, brake, angle)
-    except Exception, e:
-        print e
+    #    return -1
+
 
 
 if __name__ == '__main__':

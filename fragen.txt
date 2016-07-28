@@ -1,0 +1,8 @@
+Thread -> Absturz
+
+python: ../../nest-2.10.0/nestkernel/scheduler.h:774: librandom::RngPtr nest::Scheduler::get_rng(nest::thread) const: Assertion `thrd < static_cast< thread >( rng_.size() )' failed.
+python: ../../nest-2.10.0/nestkernel/scheduler.h:774: librandom::RngPtr nest::Scheduler::get_rng(nest::thread) const: Assertion `thrd < static_cast< thread >( rng_.size() )' failed.
+
+
+IF neuron spikes
+
