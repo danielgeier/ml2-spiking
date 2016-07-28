@@ -1,12 +1,10 @@
-from time import sleep
+import time
 
 import rospy
-import time
+from gazebo_msgs.msg import ModelState
 from geometry_msgs.msg import Pose, Point, Quaternion, Vector3
 from geometry_msgs.msg._Twist import Twist
-from rospy.timer import sleep
-from std_msgs.msg import String, Bool
-from gazebo_msgs.msg import ModelState
+from std_msgs.msg import Bool, Float64MultiArray
 
 STARTING_POSE = Pose(Point(0.00338126594668, -2.74352205099, 0.449979358999),
                      Quaternion(-4.21134441427e-07, 5.90477668767e-05, -0.00338638200865,
@@ -28,7 +26,7 @@ class CarControlNode:
         rospy.init_node(self.node_name, disable_signals=True)
 
         self.sub_carPose = rospy.Subscriber('/AADC_AudiTT/carPose', Pose, self.car_of_map)
-        self.sub_carDist = rospy.Subscriber('/AADC_AudiTT/DistanceOneCrossing',String, self.get_distance)
+        self.sub_carDist = rospy.Subscriber('/laneletInformation', Float64MultiArray, self.get_distance)
         self.pub_carModel = rospy.Publisher('/gazebo/set_model_state', ModelState, queue_size=1)
         self.pub_carUpdate = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
         self.pub_carUpdate = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
@@ -36,9 +34,8 @@ class CarControlNode:
         self.pub_is_set_back = rospy.Publisher('/AADC_AudiTT/isSetBack', Bool, queue_size=1)
         self.reset = False
 
-    def get_distance(self, string):
-        print string
-        self.distance = float(string.data)
+    def get_distance(self, lanelet_info):
+        self.distance = lanelet_info.data[0]
         #self.pub_is_set_back.publish(False)
         self.car_of_lane()
 
@@ -55,13 +52,13 @@ class CarControlNode:
             self.reset = False
 
         newsec = time.time()
+        print(self.reset, self.distance, self.oldsec, newsec)
         if newsec - self.oldsec >= 0.5:
             print newsec,'new',self.oldsec
 
             self.oldsec = time.time()
             self.reset_car_pose()
             self.reset = True
-
 
     def reset_car_pose(self):
         print 'isch runnergfalle oder zu lang wegg'
@@ -74,7 +71,6 @@ class CarControlNode:
         ModelState_x.pose = STARTING_POSE
         ModelState_x.twist = Twist(Vector3(0,0,0),Vector3(0,0,0))
         self.pub_carModel.publish(ModelState_x)
-
 
     def reset_car_update(self):
         print 'Speed and Angle reset'

@@ -3,16 +3,15 @@ from __future__ import division
 import cv2
 import numpy as np
 import rospy
-
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Vector3
-from std_msgs.msg import String, Bool
 from pyNN import nest
 from pyNN.nest import Population, AllToAllConnector, FromListConnector, IF_curr_alpha
 from pyNN.nest.projections import Projection
 from pyNN.random import RandomDistribution
 from sensor_msgs.msg import Image
-import time
+from snn_plotter.proxy import PlotterProxy
+from std_msgs.msg import Bool, Float64MultiArray
 
 NUM_IN_LEARNING_LAYER = 2
 NUM_MIDDLE_LEARNING_LAYER = 50
@@ -42,7 +41,7 @@ class SpikingNetworkNode:
         rospy.init_node(self.node_name, disable_signals=True)
         self.bridge = CvBridge()
         self.sub = rospy.Subscriber('/spiky/retina_image', Image, self.save_frame)
-        self.sub_lanelet = rospy.Subscriber('/AADC_AudiTT/DistanceOneCrossing', String, self.save_distance)
+        self.sub_lanelet = rospy.Subscriber('/laneletInformation', Float64MultiArray, self.save_distance)
         self.sub_is_set_back = rospy.Subscriber('/AADC_AudiTT/isSetBack', Bool, self.set_param_back)
         self.pub = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
         self.last_frame = None
@@ -58,8 +57,8 @@ class SpikingNetworkNode:
     def publish(self, gas, brake, steering_angle):
         self.pub.publish(gas, brake, steering_angle)
 
-    def save_distance(self, distance_string):
-        self.last_distance =  float(distance_string.data)
+    def save_distance(self, lanelet_info):
+        self.last_distance = lanelet_info.data[0]
 
     def set_param_back(self, isSetBack):
         self.is_set_back = isSetBack.data
@@ -70,6 +69,8 @@ class SpikingNetwork:
         # Most recent time step is in last array position
         # Neurons in row, spikes for current time step in column
         self.spikes = np.zeros((NUM_RL_NEURONS, NUM_TRACE_STEPS), dtype='int32')
+        self.reward = 0
+        self.last_distance = 0
         nest.setup(timestep=TIME_STEP)
         self.eligibility_trace = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_OUT_LEARNING_LAYER))
         self.weights = np.zeros((NUM_MIDDLE_LEARNING_LAYER, NUM_OUT_LEARNING_LAYER))
@@ -184,15 +185,27 @@ class SpikingNetwork:
 
         print self.weights
 
+        PLOT_STEPS = 10
+        self.proxy = PlotterProxy(20., PLOT_STEPS)
+        self.proxy.add_spike_train_plot(self.pop_learning_mid, label='Learning Mid')
+        self.proxy.add_spike_train_plot(self.pop_learning_out, label='Learning Out')
+
     def calc_reward(self, distance):
         #negative rewards doppelt gewichten
+        distance_change = self.last_distance - distance
+        self.last_distance = distance
         varianz = 0.2
         mean = 0
 
         #reward = ((1 / np.math.sqrt(2 * np.math.pi * varianz )) * np.math.exp(-1 * np.math.pow(distance - mean,2) / 2* varianz)) -0.5
-        reward =  -20 * distance**2 + 1
+        reward =  distance_change**2
         #reward = 0.5 - distance
-        reward = reward * 10 if reward < 0 else reward
+        # reward = reward * 10 if reward < 0 else reward
+        if reward > 0:
+            reward *= 100
+        if reward < -100:
+            reward = -100
+
         return reward
 
 
@@ -207,7 +220,7 @@ class SpikingNetwork:
         nest.run(tstop)
         nest.end()
 
-
+        self.proxy.update(nest.get_current_time())
 
         self.spikes[:, 0] = nest.nest.GetStatus(self.all_detectors, 'n_events')
 
@@ -215,7 +228,7 @@ class SpikingNetwork:
 
         self.spikes = np.roll(self.spikes, -1, axis=1)
 
-        print 'spikes', self.spikes
+        # print 'spikes', self.spikes
 
         num_spikes_l = self.spikes[-1,-1]
         num_spikes_r = self.spikes[-2,-1]
@@ -225,13 +238,15 @@ class SpikingNetwork:
         angle = num_spikes_diff / 10
         brake = 0  # np.exp(abs(angle)) - 1
         gas = 1 / (abs(angle) + 1.5)
-        print 'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f}'.format(
+        print 'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f} | distance {:3.2f} |reward {:3.2f}'.format(
             num_spikes_l,
             num_spikes_r,
             num_spikes_diff,
             gas,
             brake,
-            angle)
+            angle,
+            self.last_distance,
+            self.reward)
 
         return gas, brake, angle
 
@@ -259,18 +274,18 @@ class SpikingNetwork:
 
     def learn(self, last_distance):
 
-        reward = self.calc_reward(last_distance)
+        self.reward = self.calc_reward(last_distance)
 
         self.eligibility_trace *= DISCOUNT_FACTOR
 
         self.eligibility_trace += self.calc_eligibility_change()
 
-        print 'weights:',self.weights
-        print 'elig:',self.eligibility_trace
-        print 'reward:',reward
+        # print 'weights:',self.weights
+        # print 'elig:',self.eligibility_trace
+        # print 'reward:',reward
 
 
-        self.weights += LEARNING_RATE * reward * self.eligibility_trace
+        self.weights += LEARNING_RATE * self.reward * self.eligibility_trace
         self.projection_learning_out.setWeights(self.weights / 1000)
 
 
@@ -284,8 +299,7 @@ def main():
 
    # try:
     while True:
-        net.learn(node.last_distance)
-        print node.is_set_back
+        # print node.is_set_back
         if node.is_set_back:
             net.spikes = np.zeros((NUM_RL_NEURONS, NUM_TRACE_STEPS), dtype='int32')
             net.eligibility_trace = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_OUT_LEARNING_LAYER))
@@ -301,6 +315,8 @@ def main():
         cv2.waitKey(1)
 
         node.publish(gas, brake, angle)
+
+        net.learn(node.last_distance)
     #except Exception, e:
      #   print e
 
