@@ -4,8 +4,10 @@
   <arg name="gzname" default="gazebo"/>
   <arg name="gzworld" value="/disk/users/mlprak2/lea_fabian/ml2-spiking/src/worlds/tcrossing.world"/>
   <arg name="extra_gazebo_args" value="--verbose"/>
+
   <param name="/use_sim_time" type="bool" value="true"/>
-  
+  <param name="/lanelet_filename" type="str" value="/disk/users/mlprak2/lea_fabian/ml2-spiking/src/worlds/tcrossing_lanelet.osm" />
+
   <node name="gazebo" pkg="gazebo_ros" type="gazebo" args="$(arg gzworld) $(arg extra_gazebo_args)" output="screen"/>
   <node name="tcrossing_lanelet" pkg="vehicle_control" type="tcrossing_lanelet" output="screen"/>
 

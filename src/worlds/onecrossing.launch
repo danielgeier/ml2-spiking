@@ -5,9 +5,12 @@
   <arg name="gzworld" value="/disk/users/mlprak2/lea_fabian/ml2-spiking/src/worlds/onecrossing.world"/>
   <arg name="extra_gazebo_args" value="--verbose"/>
   <param name="/use_sim_time" type="bool" value="true"/>
-  
+  <param name="/AADC_AudiTT/lanelet_filename" type="str" value="/disk/users/mlprak2/lea_fabian/ml2-spiking/src/worlds/onecrossing_lanelet.osm" /> 
+ 
   <node name="gazebo" pkg="gazebo_ros" type="gazebo" args="$(arg gzworld) $(arg extra_gazebo_args)" output="screen"/>
-  <node name="onecrossing_lanelet" pkg="vehicle_control" type="onecrossing_lanelet" output="screen"/>
+  <node name="lanelet_information" pkg="vehicle_control" type="lanelet_information" output="screen"/>
+  <node name="lanelet_random_pos" pkg="vehicle_control" type="lanelet_random_pos" output="screen"/>
+
 
   <include file="$(find cvs_gazebo)/launch/kog_auto_1516_essential.launch" />
   <include file="$(find cvs_gazebo)/launch/kog_auto_1516_g25.launch" />
