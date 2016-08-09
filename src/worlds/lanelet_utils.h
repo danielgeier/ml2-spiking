@@ -1,0 +1,4 @@
+#ifndef LANELET_UTILS_H
+#define LANELET_UTILS_H
+
+#endif // LANELET_UTILS_H
