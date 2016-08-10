@@ -16,10 +16,12 @@ from sensor_msgs.msg import Image, CameraInfo
 from rospy.numpy_msg import numpy_msg
 import numpy as np
 from cv_bridge import CvBridge, CvBridgeError
+
 import pyNN
 from pyNN.nest import Population, SpikeSourcePoisson, SpikeSourceArray, AllToAllConnector, run, setup, IF_curr_alpha
 from pyNN.nest.projections import Projection
 import matplotlib.pyplot as plt
+
 
 setup(timestep=0.1)
 

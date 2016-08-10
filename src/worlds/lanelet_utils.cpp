@@ -1,6 +1,6 @@
 #include "lanelet_utils.h"
 
-geometry_msgs::Point quatRotation(const geometry_msgs::Point& p, const geometry_msgs::Quaternion& q)
+geometry_msgs::Point quaternionRotation(const geometry_msgs::Point& p, const geometry_msgs::Quaternion& q)
 {
     //Rotated point
     geometry_msgs::Point r;
@@ -52,7 +52,6 @@ geometry_msgs::Point transformGPSToPoint(LLet::point_with_id_t point, LLet::poin
   return p;
 }
 
-
 std::string retrieveLaneletFilename(void)
 {
     //Retrieve Lanelet filename
@@ -71,4 +70,52 @@ std::string retrieveLaneletFilename(void)
     }
 
     return laneletFilename;
+}
+
+double determineSide(const LLet::point_with_id_t& p, LLet::lanelet_ptr_t llnet) {
+    std::size_t idx = 0;
+    std::size_t prevIdx = 0;
+    std::size_t nextIdx = 0;
+    double angle = 0;
+
+    //Project point
+    lanelet_point projected_point = llnet->project(p, &angle, &idx, &prevIdx, &nextIdx);
+
+    //Get neighbors of projected point to find out leanelet heading vector 'l'
+    LLet::strip_ptr_t center_line_strip = boost::get<LLet::SIDE::CENTER>(llnet->bounds());
+    std::vector<lanelet_point>& points = center_line_strip->pts();
+
+    geometry_msgs::Point p1 = geom_point(points[prevIdx]);
+    geometry_msgs::Point p2 = geom_point(points[nextIdx]);
+
+    //lanelet heading 'l'
+    geometry_msgs::Point l = geom_point(p2.x - p1.x, p2.y - p1.y,true);
+
+    //car vector 'v'
+    geometry_msgs::Point gp = geom_point(p);
+    geometry_msgs::Point v = geom_point(gp.x - p1.x, gp.y - p1.y,true);
+
+    //Calculate a signed angle between the two vectors
+    double theta = atan2(l.x*v.y - l.y*v.x, l.x*v.x + l.y*v.y);
+    double s = theta < 0? -1 : (theta == 0? 0 : 1); //-1 = left, 0=center, 1=right
+
+    return s;
+}
+
+geometry_msgs::Point geom_point(lanelet_point p, bool normalize) {
+    return geom_point(boost::get<0>(p), boost::get<1>(p), normalize);
+}
+
+geometry_msgs::Point geom_point(double x, double y, bool normalize) {
+    geometry_msgs::Point gp;
+    gp.x = x;
+    gp.y = y;
+
+    if (normalize) {
+        double l = std::sqrt(gp.x*gp.x + gp.y*gp.y);
+        gp.x /= l;
+        gp.y /= l;
+    }
+
+    return gp;
 }

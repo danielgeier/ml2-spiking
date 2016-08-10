@@ -3,6 +3,7 @@ from __future__ import division
 import cv2
 import numpy as np
 import rospy
+
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Vector3
 from pyNN import nest
@@ -11,7 +12,10 @@ from pyNN.nest.projections import Projection
 from pyNN.random import RandomDistribution
 from sensor_msgs.msg import Image
 from snn_plotter.proxy import PlotterProxy
+from vehicle_control.srv import *
 from std_msgs.msg import Bool, Float64MultiArray
+
+
 
 NUM_IN_LEARNING_LAYER = 2
 NUM_MIDDLE_LEARNING_LAYER = 50
@@ -29,6 +33,27 @@ BETA_SIGMA = 0.3  # ?
 SIGMA = 0.001
 
 
+class LaneletInformation:
+    def __init__(self, data):
+        self.distance = data[0]
+        self.laneletAngle = data[2]
+
+        self.isOnLane = bool(data[1])
+        self.isLeft = bool(data[3])
+        self.isRight = not self.isLeft
+
+    def __str__(self):
+        s = """
+        Is on Lane: %s
+        Is Left: %s
+        Is Right: %s
+        Distance: %.2f
+        Angle of Vehicle to Lanelet (rad): %.2f
+        """ % (self.isOnLane, self.isLeft, self.isRight, self.distance, self.laneletAngle)
+
+        return s
+
+
 class SpikingNetworkNode:
     """Get retina images and store them. Publish to Gazebo."""
 
@@ -41,11 +66,12 @@ class SpikingNetworkNode:
         rospy.init_node(self.node_name, disable_signals=True)
         self.bridge = CvBridge()
         self.sub = rospy.Subscriber('/spiky/retina_image', Image, self.save_frame)
-        self.sub_lanelet = rospy.Subscriber('/laneletInformation', Float64MultiArray, self.save_distance)
+        self.sub_lanelet = rospy.Subscriber('/laneletInformation', Float64MultiArray, self.update_car_state)
         self.sub_is_set_back = rospy.Subscriber('/AADC_AudiTT/isSetBack', Bool, self.set_param_back)
         self.pub = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
         self.last_frame = None
         self.last_distance = None
+        self.lanelet_information = None
         # Make sure we get at least one frame
         rospy.wait_for_message('/spiky/retina_image', Image)
         # Make sure it is grayscale
@@ -57,8 +83,10 @@ class SpikingNetworkNode:
     def publish(self, gas, brake, steering_angle):
         self.pub.publish(gas, brake, steering_angle)
 
-    def save_distance(self, lanelet_info):
-        self.last_distance = lanelet_info.data[0]
+    def update_car_state(self, lanelet_info):
+        if len(lanelet_info.data) > 0:
+            self.lanelet_information = LaneletInformation(lanelet_info.data)
+            self.last_distance = lanelet_info.data[0]
 
     def set_param_back(self, isSetBack):
         self.is_set_back = isSetBack.data
@@ -287,8 +315,6 @@ class SpikingNetwork:
 
         self.weights += LEARNING_RATE * self.reward * self.eligibility_trace
         self.projection_learning_out.setWeights(self.weights / 1000)
-
-
 
 def main():
     node = SpikingNetworkNode()
