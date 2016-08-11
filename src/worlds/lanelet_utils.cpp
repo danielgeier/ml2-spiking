@@ -85,18 +85,18 @@ double determineSide(const LLet::point_with_id_t& p, LLet::lanelet_ptr_t llnet) 
     LLet::strip_ptr_t center_line_strip = boost::get<LLet::SIDE::CENTER>(llnet->bounds());
     std::vector<lanelet_point>& points = center_line_strip->pts();
 
-    geometry_msgs::Point p1 = geom_point(points[prevIdx]);
-    geometry_msgs::Point p2 = geom_point(points[nextIdx]);
+    LLet::point_with_id_t p1 = points[prevIdx];
+    LLet::point_with_id_t p2 = points[nextIdx];
 
-    //normalized lanelet heading vector 'l'
-    geometry_msgs::Point l = geom_point(p2.x - p1.x, p2.y - p1.y,true);
+    //lanelet heading vector 'l'
+    boost::tuple<double,double> l = boost::make_tuple(boost::get<0>(p2) - boost::get<0>(p1), boost::get<1>(p2) - boost::get<1>(p1));
 
-    //normalized car vector 'v'
-    geometry_msgs::Point gp = geom_point(p);
-    geometry_msgs::Point v = geom_point(gp.x - p1.x, gp.y - p1.y,true);
+    //vehicle vector 'v'
+    boost::tuple<double,double> v = boost::make_tuple(boost::get<0>(p) - boost::get<0>(p1), boost::get<1>(p) - boost::get<1>(p1));
 
-    //calculate on which side 'v' is located with respect to 'l': sign(det): -1->left , 0->center, 1->right
-    double det = l.x*v.y - l.y*v.x;
+    //calculate on which side 'v' is located  with respect to 'l': sign(det): -1->left , 0->center, 1->right
+    //-> determinant
+    double det = boost::get<0>(l)*boost::get<1>(v) - boost::get<1>(l)*boost::get<0>(v);
     double s = det < 0? -1 : (det == 0? 0 : 1); //-1 = left, 0=center, 1=right
 
     return s;

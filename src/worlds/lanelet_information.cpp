@@ -119,7 +119,6 @@ int main(int argc, char **argv)
         double mySignedDistance = side * distance_center_line;
 
         //Check the nearest lanelet to determine whether the car is on the lane or not
-        llmap.map_matching(current_location, llnet, MAX_DISTANCE);
         bool isCovered = llnet->covers_point(current_location);
 
         //Determine on which side of the (constructed) mid lane the vehicle is driving
