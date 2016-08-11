@@ -81,23 +81,23 @@ double determineSide(const LLet::point_with_id_t& p, LLet::lanelet_ptr_t llnet) 
     //Project point
     lanelet_point projected_point = llnet->project(p, &angle, &idx, &prevIdx, &nextIdx);
 
-    //Get neighbors of projected point to find out leanelet heading vector 'l'
+    //Get neighbors of projected point to calculate lanelet heading vector 'l'
     LLet::strip_ptr_t center_line_strip = boost::get<LLet::SIDE::CENTER>(llnet->bounds());
     std::vector<lanelet_point>& points = center_line_strip->pts();
 
     geometry_msgs::Point p1 = geom_point(points[prevIdx]);
     geometry_msgs::Point p2 = geom_point(points[nextIdx]);
 
-    //lanelet heading 'l'
+    //normalized lanelet heading vector 'l'
     geometry_msgs::Point l = geom_point(p2.x - p1.x, p2.y - p1.y,true);
 
-    //car vector 'v'
+    //normalized car vector 'v'
     geometry_msgs::Point gp = geom_point(p);
     geometry_msgs::Point v = geom_point(gp.x - p1.x, gp.y - p1.y,true);
 
-    //Calculate a signed angle between the two vectors
-    double theta = atan2(l.x*v.y - l.y*v.x, l.x*v.x + l.y*v.y);
-    double s = theta < 0? -1 : (theta == 0? 0 : 1); //-1 = left, 0=center, 1=right
+    //calculate on which side 'v' is located with respect to 'l': sign(det): -1->left , 0->center, 1->right
+    double det = l.x*v.y - l.y*v.x;
+    double s = det < 0? -1 : (det == 0? 0 : 1); //-1 = left, 0=center, 1=right
 
     return s;
 }
