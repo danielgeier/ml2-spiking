@@ -21,7 +21,7 @@ NUM_IN_LEARNING_LAYER = 2
 NUM_MIDDLE_LEARNING_LAYER = 50
 NUM_OUT_LEARNING_LAYER = 2
 NUM_RL_NEURONS = NUM_MIDDLE_LEARNING_LAYER + NUM_OUT_LEARNING_LAYER
-
+IN_WEIGHTS = 1.0 # Feature Layer to Mid Layer (Learning)
 TIME_STEP = 0.1 # ?
 
 # Parameters for reinforcement learning
@@ -102,6 +102,7 @@ class SpikingNetwork:
         nest.setup(timestep=TIME_STEP)
         self.eligibility_trace = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_OUT_LEARNING_LAYER))
         self.weights = np.zeros((NUM_MIDDLE_LEARNING_LAYER, NUM_OUT_LEARNING_LAYER))
+        self.learningrate_fakt = LEARNING_RATE
         num_neurons = width * height
 
         self.sum_spikes_l = 0
@@ -115,16 +116,16 @@ class SpikingNetwork:
         conn_list_l = []
         for neuron in self.pop_in_l:
             neuron = neuron - self.pop_in_l.first_id
-            if (neuron % 50) <= 25 and neuron <= 1250:
+            if (neuron % 50) <= 25 and neuron <= 1250: # oben links
                 conn_list_l.append((neuron, 0, 1.0, 0.1))
 
-            if (neuron % 50) > 25 and neuron <= 1250:
+            if (neuron % 50) > 25 and neuron <= 1250: # oben rechts
                 conn_list_l.append((neuron, 1, 1.0, 0.1))
 
-            if (neuron % 50) <= 25 and neuron > 1250:
+            if (neuron % 50) <= 25 and neuron > 1250: # unten links
                 conn_list_l.append((neuron, 2, 1.0, 0.1))
 
-            if (neuron % 50) > 25 and neuron > 1250:
+            if (neuron % 50) > 25 and neuron > 1250: # unten rechts   DOPPELT gewichtet
                 conn_list_l.append((neuron, 3, 1.0, 0.1))
 
         # layer2 rechts
@@ -132,16 +133,16 @@ class SpikingNetwork:
         conn_list_r = []
         for neuron in self.pop_in_r:
             neuron = neuron - self.pop_in_r.first_id
-            if (neuron % 50) <= 25 and neuron <= 1250:
+            if (neuron % 50) <= 25 and neuron <= 1250: # oben links
                 conn_list_r.append((neuron, 0, 1.0, 0.1))
 
-            if (neuron % 50) > 25 and neuron <= 1250:
+            if (neuron % 50) > 25 and neuron <= 1250: # oben recht
                 conn_list_r.append((neuron, 1, 1.0, 0.1))
 
-            if (neuron % 50) <= 25 and neuron > 1250:
+            if (neuron % 50) <= 25 and neuron > 1250: #unten links DOPPELT gewichtet
                 conn_list_r.append((neuron, 2, 1.0, 0.1))
 
-            if (neuron % 50) > 25 and neuron > 1250:
+            if (neuron % 50) > 25 and neuron > 1250: # unten rechts
                 conn_list_r.append((neuron, 3, 1.0, 0.1))
 
         # Layer 3 output
@@ -156,11 +157,18 @@ class SpikingNetwork:
         self.projection_layer2_l.setWeights(1.0)
         self.projection_layer2_r.setWeights(1.0)
 
+
         self.projection_out_l = Projection(self.pop_in_l2, self.pop_out_l, AllToAllConnector())
         self.projection_out_r = Projection(self.pop_in_r2, self.pop_out_r, AllToAllConnector())
 
         self.projection_out_l.setWeights(1.0)
         self.projection_out_r.setWeights(1.0)
+
+        # bild mitte doppelt gewichtet
+       # self.projection_out_l[3].setWeights(2.0)
+        #self.projection_out_r[2].setWeights(2.0)
+        self.projection_out_l[3]._set_weight(2.0)
+        self.projection_out_r[2]._set_weight(2.0)
 
         self.spikedetector_left = nest.nest.Create('spike_detector')[0]
         self.spikedetector_right = nest.nest.Create('spike_detector')[0]
@@ -196,55 +204,75 @@ class SpikingNetwork:
         self.projection_in_rechts = Projection(self.pop_out_r, self.pop_learning_mid, AllToAllConnector())
         self.projection_learning_out = Projection(self.pop_learning_mid, self.pop_learning_out, AllToAllConnector())
 
-        self.projection_in_links.setWeights(vthresh_distr_1)
-        self.projection_in_rechts.setWeights(vthresh_distr_1)
+        # self.projection_in_links.setWeights(vthresh_distr_1)
+        # self.projection_in_rechts.setWeights(vthresh_distr_1)
+
+        self.projection_in_links.setWeights(IN_WEIGHTS)
+        self.projection_in_rechts.setWeights(IN_WEIGHTS)
         self.projection_learning_out.setWeights(vthresh_distr_2)
 
-        print 'pynn',self.projection_in_links.getWeights()
+        #print 'pynn',self.projection_in_links.getWeights()
 
-
-
-        count = 0
-        for neuron in self.pop_learning_mid:
-            target_con =  nest.nest.GetConnections(target=[neuron])
-            self.weights[count] = nest.nest.GetStatus(target_con, 'weight')
-
-            count += 1
-
-        print self.weights
+        i = 0
+        for neuron in self.pop_learning_out:
+            # Skip detector
+            if i > 1:
+                break
+            target_con = nest.nest.GetConnections(target=[neuron])
+            weights = nest.nest.GetStatus(target_con, 'weight')
+            j = 0
+            for w in weights:
+                self.weights[j,i] = w
+                j += 1
+            i += 1
 
         PLOT_STEPS = 10
         self.proxy = PlotterProxy(20., PLOT_STEPS)
+        self.proxy.add_spike_train_plot(self.pop_out_l, label='Learning In_L')
+        self.proxy.add_spike_train_plot(self.pop_out_r, label='Learning In_R')
         self.proxy.add_spike_train_plot(self.pop_learning_mid, label='Learning Mid')
         self.proxy.add_spike_train_plot(self.pop_learning_out, label='Learning Out')
 
-    def calc_reward(self, distance):
-        #negative rewards doppelt gewichten
-        distance_change = self.last_distance - distance
-        self.last_distance = distance
-        varianz = 0.2
-        mean = 0
 
+    def calc_reward(self, lanelet_information, angle):
+        #negative rewards doppelt gewichten
+        #distance_change = self.last_distance - distance
+        isOnLanelet = lanelet_information.isOnLane
+        reward = 0
+        distance = lanelet_information.distance
+        if isOnLanelet:
+            reward = (1-distance)
+        else:
+            if (lanelet_information.isLeft and angle < 0) or (lanelet_information.isRight and angle > 0):
+                reward = 0.1
+            else:
+                reward = -10. * (distance + 1) * (abs(angle)+1)
+
+        #self.last_distance = distance
+        #varianz = 0.2
+        #mean = 0
         #reward = ((1 / np.math.sqrt(2 * np.math.pi * varianz )) * np.math.exp(-1 * np.math.pow(distance - mean,2) / 2* varianz)) -0.5
-        reward =  distance_change**2
+        #reward =  distance_change**2
         #reward = 0.5 - distance
         # reward = reward * 10 if reward < 0 else reward
-        if reward > 0:
-            reward *= 100
-        if reward < -100:
-            reward = -100
+
+
+        #if reward > 0:
+        #    reward *= 100
+        if reward < -20:
+            reward = -20
 
         return reward
 
 
-    def inject(self, frame):
+    def inject(self, frame, lanelet_information):
         frame_l = frame[0:50, 0:50]
         frame_r = frame[0:50, 50:100]
 
         self.pop_in_l.set(i_offset=frame_l.astype(float).flatten())
         self.pop_in_r.set(i_offset=frame_r.astype(float).flatten())
 
-        tstop = 20.0 #
+        tstop = 50.0 #
         nest.run(tstop)
         nest.end()
 
@@ -257,23 +285,27 @@ class SpikingNetwork:
         self.spikes = np.roll(self.spikes, -1, axis=1)
 
         # print 'spikes', self.spikes
+        if lanelet_information is not None:
+            distance = lanelet_information.distance
+        else:
+            distance = -1
 
         num_spikes_l = self.spikes[-1,-1]
         num_spikes_r = self.spikes[-2,-1]
 
         num_spikes_diff = num_spikes_l - num_spikes_r
         # TODO ensure -1 <= angle <= 1
-        angle = num_spikes_diff / 10
+        angle = num_spikes_diff / 10 # minus = rechts
         brake = 0  # np.exp(abs(angle)) - 1
-        gas = 1 / (abs(angle) + 1.5)
-        print 'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f} | distance {:3.2f} |reward {:3.2f}'.format(
+        gas = 1 / (abs(angle) + 2.5)
+        print 'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f} | distance {:3.7f} |reward {:3.2f}'.format(
             num_spikes_l,
             num_spikes_r,
             num_spikes_diff,
             gas,
             brake,
             angle,
-            self.last_distance,
+            distance,
             self.reward)
 
         return gas, brake, angle
@@ -300,20 +332,20 @@ class SpikingNetwork:
         # change_elig[i, j] is now the eligibility trace change for the connection from i to j
         # TODO: check if actual connection exists
 
-    def learn(self, last_distance):
+    def learn(self, lanlet_information, angle):
 
-        self.reward = self.calc_reward(last_distance)
+        self.reward = self.calc_reward(lanlet_information, angle)
 
         self.eligibility_trace *= DISCOUNT_FACTOR
-
         self.eligibility_trace += self.calc_eligibility_change()
 
         # print 'weights:',self.weights
         # print 'elig:',self.eligibility_trace
         # print 'reward:',reward
 
-
-        self.weights += LEARNING_RATE * self.reward * self.eligibility_trace
+        self.learningrate_fakt -= self.learningrate_fakt/100
+        self.weights += self.learningrate_fakt * self.reward * self.eligibility_trace
+        #self.weights += LEARNING_RATE * self.reward * self.eligibility_trace
         self.projection_learning_out.setWeights(self.weights / 1000)
 
 def main():
@@ -334,7 +366,7 @@ def main():
             node.is_set_back = False
         cv2.imshow('weights',cv2.resize(net.weights / 1000 ,(0,0), fx=100, fy=10,interpolation=cv2.INTER_NEAREST))
         frame = node.last_frame
-        gas, brake, angle = net.inject(frame)
+        gas, brake, angle = net.inject(frame, node.lanelet_information)
         frame2 = frame.copy()
         frame2.T[50] = 255 - frame2.T[50]
         cv2.imshow('Cam', frame2)
@@ -342,7 +374,7 @@ def main():
 
         node.publish(gas, brake, angle)
 
-        net.learn(node.last_distance)
+        net.learn(node.lanelet_information, angle)
     #except Exception, e:
      #   print e
 
