@@ -1,8 +1,10 @@
 from __future__ import division
 
+import sys
 import cv2
 import numpy as np
 import rospy
+import argparse
 
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Vector3
@@ -12,7 +14,9 @@ from pyNN.nest.projections import Projection
 from pyNN.random import RandomDistribution
 from sensor_msgs.msg import Image
 from snn_plotter.proxy import PlotterProxy
-from vehicle_control.srv import *
+import time
+import logging.handlers as handlers
+
 from std_msgs.msg import Bool, Float64MultiArray
 
 
@@ -58,6 +62,7 @@ class SpikingNetworkNode:
     """Get retina images and store them. Publish to Gazebo."""
 
     def __init__(self):
+        # type: () -> SpikingNetworkNode
         # Most recent time step is in last array position
         # Neurons in row, spikes for current time step in column
         #self.spikes = np.zeros((NUM_IN_LEARNING_LAYER + NUM_RL_NEURONS, NUM_TRACE_STEPS),dtype='int32')
@@ -93,7 +98,7 @@ class SpikingNetworkNode:
 
 
 class SpikingNetwork:
-    def __init__(self, width, height):
+    def __init__(self, width, height, plot):
         # Most recent time step is in last array position
         # Neurons in row, spikes for current time step in column
         self.spikes = np.zeros((NUM_RL_NEURONS, NUM_TRACE_STEPS), dtype='int32')
@@ -102,6 +107,7 @@ class SpikingNetwork:
         nest.setup(timestep=TIME_STEP)
         self.eligibility_trace = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_OUT_LEARNING_LAYER))
         self.weights = np.zeros((NUM_MIDDLE_LEARNING_LAYER, NUM_OUT_LEARNING_LAYER))
+        self.plot = plot
         num_neurons = width * height
 
         self.sum_spikes_l = 0
@@ -196,27 +202,33 @@ class SpikingNetwork:
         self.projection_in_rechts = Projection(self.pop_out_r, self.pop_learning_mid, AllToAllConnector())
         self.projection_learning_out = Projection(self.pop_learning_mid, self.pop_learning_out, AllToAllConnector())
 
-        self.projection_in_links.setWeights(vthresh_distr_1)
-        self.projection_in_rechts.setWeights(vthresh_distr_1)
+        #self.projection_in_links.setWeights(vthresh_distr_1)
+        #self.projection_in_rechts.setWeights(vthresh_distr_1)
+        self.projection_in_links.setWeights(1.0)
+        self.projection_in_rechts.setWeights(1.0)
         self.projection_learning_out.setWeights(vthresh_distr_2)
 
         print 'pynn',self.projection_in_links.getWeights()
 
-
-
-        count = 0
-        for neuron in self.pop_learning_mid:
+        i = 0
+        for neuron in self.pop_learning_out:
+            #Skip detect
+            if i > 1:
+                break
             target_con =  nest.nest.GetConnections(target=[neuron])
-            self.weights[count] = nest.nest.GetStatus(target_con, 'weight')
+            weights = nest.nest.GetStatus(target_con, 'weight')
+            j = 0
+            for w in weights:
+                self.weights[j,i] = w
+                j += 1
+            i += 1
 
-            count += 1
+        if self.plot:
+            PLOT_STEPS = 10
+            self.proxy = PlotterProxy(20., PLOT_STEPS)
+            self.proxy.add_spike_train_plot(self.pop_learning_mid, label='Learning Mid')
+            self.proxy.add_spike_train_plot(self.pop_learning_out, label='Learning Out')
 
-        print self.weights
-
-        PLOT_STEPS = 10
-        self.proxy = PlotterProxy(20., PLOT_STEPS)
-        self.proxy.add_spike_train_plot(self.pop_learning_mid, label='Learning Mid')
-        self.proxy.add_spike_train_plot(self.pop_learning_out, label='Learning Out')
 
     def calc_reward(self, distance):
         #negative rewards doppelt gewichten
@@ -248,7 +260,8 @@ class SpikingNetwork:
         nest.run(tstop)
         nest.end()
 
-        self.proxy.update(nest.get_current_time())
+        if self.plot:
+            self.proxy.update(nest.get_current_time())
 
         self.spikes[:, 0] = nest.nest.GetStatus(self.all_detectors, 'n_events')
 
@@ -316,10 +329,50 @@ class SpikingNetwork:
         self.weights += LEARNING_RATE * self.reward * self.eligibility_trace
         self.projection_learning_out.setWeights(self.weights / 1000)
 
-def main():
+
+class SizedTimedRotatingFileHandler(handlers.TimedRotatingFileHandler):
+    """
+    Handler for logging to a set of files, which switches from one file
+    to the next when the current file reaches a certain size, or at certain
+    timed intervals
+    """
+    def __init__(self, filename, mode='a', maxBytes=0, backupCount=0, encoding=None,
+                 delay=0, when='h', interval=1, utc=False):
+        if maxBytes > 0:
+            self.mode = 'a'
+        handlers.TimedRotatingFileHandler.__init__(
+            self, filename, when, interval, backupCount, encoding, delay, utc)
+        self.maxBytes = maxBytes
+
+    def shouldRollover(self, record):
+        if self.stream is None:                 # delay was set...
+            self.stream = self._open()
+        if self.maxBytes > 0:                   # are we rolling over?
+            msg = "%s\n" % self.format(record)
+            self.stream.seek(0, 2)  #due to non-posix-compliant Windows feature
+            if self.stream.tell() + len(msg) >= self.maxBytes:
+                return 1
+        t = int(time.time())
+        if t >= self.rolloverAt:
+            return 1
+        return 0
+
+
+def create_argument_parser():
+    parser = argparse.ArgumentParser(description='Spiking Neural Network Node')
+    parser.add_argument('-p', '--plot', action='store_true')
+    parser.add_argument('-l', '--log', action='store_true')
+    return parser
+
+
+def main(argv):
+    parser = create_argument_parser()
+    n = parser.parse_args()
+
     node = SpikingNetworkNode()
     w, h = node.last_frame.shape
-    net = SpikingNetwork(w, h)
+
+    net = SpikingNetwork(w, h, n.plot)
     window = cv2.namedWindow('Cam', cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window, w * 4, h * 4)
 
@@ -343,12 +396,7 @@ def main():
         node.publish(gas, brake, angle)
 
         net.learn(node.last_distance)
-    #except Exception, e:
-     #   print e
-
-    #    return -1
-
 
 
 if __name__ == '__main__':
-    main()
+    main(sys.argv)
