@@ -15,10 +15,6 @@
 #include <vector>
 #include <cmath>
 
-//REMOVE
-#include "vehicle_control/random_pos_service.h"
-//-----------------------------------------------
-
 #define _USE_MATH_DEFINES 1 //needed on windows for usage of math constants such as M_PI
 #define EPS 0.0001
 #define MAX_DISTANCE 100.0
@@ -126,11 +122,9 @@ int main(int argc, char **argv)
         llmap.map_matching(current_location, llnet, MAX_DISTANCE);
         bool isCovered = llnet->covers_point(current_location);
 
-        //---- WORKAROUND ----
-        //If distance and signed distance are equal then the car is left on the left lane
+        //Determine on which side of the (constructed) mid lane the vehicle is driving
         bool isLeft  = side < 0;
         bool isRight = !isLeft;
-        //-------------------------------------------------------------------------------
 
         //Fill Message Array
         laneletInformationMessage.data.push_back(distance);

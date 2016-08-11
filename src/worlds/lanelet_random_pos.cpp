@@ -37,9 +37,13 @@ bool add(vehicle_control::random_pos_service::Request &req, vehicle_control::ran
     LLet::strip_ptr_t center_strip = boost::get<LLet::SIDE::CENTER>(positionVec_ptr->bounds());
     std::vector<LLet::point_with_id_t> points = center_strip->pts();
 
+    size = points.size();
+    random_l = (rand() % size) - 1;
+    random_l = random_l < 0? 0 : random_l;
+
     //Transform to Gazebo World Coordinates
-    geometry_msgs::Point p1 = transformGPSToPoint(points[0], reference_point);
-    geometry_msgs::Point p2 = transformGPSToPoint(points[1], reference_point);
+    geometry_msgs::Point p1 = transformGPSToPoint(points[random_l], reference_point);
+    geometry_msgs::Point p2 = transformGPSToPoint(points[random_l + 1], reference_point);
     geometry_msgs::Point heading;
 
     //Heading of the car in vector form
@@ -49,8 +53,6 @@ bool add(vehicle_control::random_pos_service::Request &req, vehicle_control::ran
 
     //Calculate the rotation angle with respect to the z-axis
     double angle = atan2(heading.y, heading.x);
-    ROS_INFO_STREAM("Angle: " << angle);
-
 
     //Calculate the reset point (center of the first two line strip points)
     geometry_msgs::Point resetPoint;
