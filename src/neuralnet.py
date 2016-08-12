@@ -14,12 +14,20 @@ from pyNN.nest.projections import Projection
 from pyNN.random import RandomDistribution
 from sensor_msgs.msg import Image
 from snn_plotter.proxy import PlotterProxy
+
+import os
 import time
+import datetime
 import logging.handlers as handlers
+import logging
+import threading
+import Tkinter as tk
 
 from std_msgs.msg import Bool, Float64MultiArray
 
-
+# Logging/Dumping locations
+DUMPS_DIR = '../dumps'
+WEIGHTS_DUMPS_DIR = os.path.join(DUMPS_DIR, 'weights')
 
 NUM_IN_LEARNING_LAYER = 2
 NUM_MIDDLE_LEARNING_LAYER = 50
@@ -107,9 +115,11 @@ class SpikingNetwork:
         nest.setup(timestep=TIME_STEP)
         self.eligibility_trace = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_OUT_LEARNING_LAYER))
         self.weights = np.zeros((NUM_MIDDLE_LEARNING_LAYER, NUM_OUT_LEARNING_LAYER))
-
         self.learningrate_fakt = LEARNING_RATE
+
+        # Flags
         self.plot = plot
+        self.learn = True
 
         num_neurons = width * height
 
@@ -203,51 +213,27 @@ class SpikingNetwork:
         self.all_detectors = np.append(self.spikedetector_l_mid,self.spikedetector_l_out)
         self.all_detectors = list(self.all_detectors)
 
-        #Wertebereich in 10^3 mit uniform=[0.1 1] (why?)
-        vthresh_distr_1 = RandomDistribution('uniform', [0.1, 2])
-        vthresh_distr_2 = RandomDistribution('uniform', [0.5, 5])
-
-
+        # Connect Layers
         self.projection_in_links = Projection(self.pop_out_l, self.pop_learning_mid,  AllToAllConnector())
         self.projection_in_rechts = Projection(self.pop_out_r, self.pop_learning_mid, AllToAllConnector())
         self.projection_learning_out = Projection(self.pop_learning_mid, self.pop_learning_out, AllToAllConnector())
 
-        # self.projection_in_links.setWeights(vthresh_distr_1)
-        # self.projection_in_rechts.setWeights(vthresh_distr_1)
+        vthresh_distr_1 = RandomDistribution('uniform', [0.1, 2])
+        self.projection_in_links.setWeights(vthresh_distr_1)
+        self.projection_in_rechts.setWeights(vthresh_distr_1)
 
-        self.projection_in_links.setWeights(IN_WEIGHTS)
-        self.projection_in_rechts.setWeights(IN_WEIGHTS)
-        self.projection_learning_out.setWeights(vthresh_distr_2)
-
-        #print 'pynn',self.projection_in_links.getWeights()
-
-        i = 0
-        for neuron in self.pop_learning_out:
-            # Skip detector
-            if i > 1:
-                break
-            target_con = nest.nest.GetConnections(target=[neuron])
-            weights = nest.nest.GetStatus(target_con, 'weight')
-            j = 0
-            for w in weights:
-                self.weights[j,i] = w
-                j += 1
-            i += 1
+        self.reset_weights()
 
         if self.plot:
-            PLOT_STEPS = 10
-            self.proxy = PlotterProxy(20., PLOT_STEPS)
+            plot_steps = 10
+            self.proxy = PlotterProxy(20., plot_steps)
             self.proxy.add_spike_train_plot(self.pop_out_l, label='Learning In_L')
             self.proxy.add_spike_train_plot(self.pop_out_r, label='Learning In_R')
             self.proxy.add_spike_train_plot(self.pop_learning_mid, label='Learning Mid')
             self.proxy.add_spike_train_plot(self.pop_learning_out, label='Learning Out')
 
-
-
-
     def calc_reward(self, lanelet_information, angle):
-        #negative rewards doppelt gewichten
-        #distance_change = self.last_distance - distance
+
         isOnLanelet = lanelet_information.isOnLane
         reward = 0
         distance = lanelet_information.distance
@@ -259,22 +245,10 @@ class SpikingNetwork:
             else:
                 reward = -10. * (distance + 1) * (abs(angle)+1)
 
-        #self.last_distance = distance
-        #varianz = 0.2
-        #mean = 0
-        #reward = ((1 / np.math.sqrt(2 * np.math.pi * varianz )) * np.math.exp(-1 * np.math.pow(distance - mean,2) / 2* varianz)) -0.5
-        #reward =  distance_change**2
-        #reward = 0.5 - distance
-        # reward = reward * 10 if reward < 0 else reward
-
-
-        #if reward > 0:
-        #    reward *= 100
         if reward < -20:
             reward = -20
 
         return reward
-
 
     def inject(self, frame, lanelet_information):
         frame_l = frame[0:50, 0:50]
@@ -310,7 +284,7 @@ class SpikingNetwork:
         angle = num_spikes_diff / 10 # minus = rechts
         brake = 0  # np.exp(abs(angle)) - 1
         gas = 1 / (abs(angle) + 2.5)
-        print 'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f} | distance {:3.7f} |reward {:3.2f}'.format(
+        print 'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f} | distance {:3.4f} |reward {:3.2f}'.format(
             num_spikes_l,
             num_spikes_r,
             num_spikes_diff,
@@ -344,7 +318,29 @@ class SpikingNetwork:
         # change_elig[i, j] is now the eligibility trace change for the connection from i to j
         # TODO: check if actual connection exists
 
-    def learn(self, lanlet_information, angle):
+    def reset_weights(self):
+        oldlearn = self.learn
+        self.learn = False
+
+        random_distribution = RandomDistribution('uniform', [0.1, 2])
+        self.projection_learning_out.setWeights(random_distribution)
+        # initialize weights for learning
+        i = 0
+        for neuron in self.pop_learning_out:
+            # Skip detector
+            if i > 1:
+                break
+            target_con = nest.nest.GetConnections(target=[neuron])
+            weights = nest.nest.GetStatus(target_con, 'weight')
+            j = 0
+            for w in weights:
+                self.weights[j,i] = w
+                j += 1
+            i += 1
+
+        self.learn = oldlearn
+
+    def update_weights(self, lanlet_information, angle):
 
         self.reward = self.calc_reward(lanlet_information, angle)
 
@@ -396,7 +392,115 @@ def create_argument_parser():
     return parser
 
 
+def create_weights_logger(compressed = False, maxbytes=104857600):  # maxbytes default: 100 MB
+    # Create timestamp for folder name in
+    timestamp = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
+    dumpdir = os.path.join(WEIGHTS_DUMPS_DIR, timestamp)
+    os.mkdir(dumpdir)
+
+    ext = 'bz2' if compressed else 'txt'
+    filename = os.path.join(dumpdir, 'weights.' + ext)
+
+    logger = logging.getLogger('WeightsLogger')
+    logger.setLevel(logging.INFO)
+    encoding = 'bz2' if compressed else None
+    handler = SizedTimedRotatingFileHandler(filename, maxBytes=maxbytes, backupCount=5, when='D', interval=10, encoding=encoding)
+
+    logger.addHandler(handler)
+
+    return logger
+
+
+def log_weights(logger, current_time, weights, formatstring='%.3f'):
+    # time, w1, w2, ...
+    s = (formatstring % current_time) + "," + ",".join(map(lambda x: formatstring % x, weights.flatten()))
+    logger.info(s)
+
+
+class CockpitViewModel:
+    def __init__(self, net):
+        self.view = Cockpit(self)
+
+        # Traced variables
+        self.learn = None
+        self.weights_mean_left = None
+        self.weights_mean_right = None
+
+        # Important: Start view before initializing the variables
+        self.view.start()
+        self.net = net
+
+    def initializeViewModel(self):
+        self.learn = tk.BooleanVar()
+        self.learn.set(self.net.learn)
+        self.weights_mean_left = tk.StringVar()
+        self.weights_mean_right = tk.StringVar()
+
+        self.learn.trace("w", self.learn_changed)
+
+    def update_weights_mean(self):
+        formatstring = "%.4f"
+        weights_mean = np.mean(self.net.weights, axis=0)
+        self.weights_mean_left.set(formatstring % weights_mean[0])
+        self.weights_mean_right.set(formatstring % weights_mean[1])
+
+
+    def reset_car_command(self):
+        print "reset car"
+
+    def reset_weights_command(self):
+        self.net.reset_weights()
+        print "weights reset!"
+
+    def learn_changed(self, *args):
+        self.net.learn = not self.net.learn
+        print "learn = %s" % self.net.learn
+
+
+class Cockpit(threading.Thread):
+    def __init__(self, viewmodel):
+        threading.Thread.__init__(self)
+        self.viewmodel = viewmodel
+        self.root = None
+        self.leftWeightsMeanLabel = None
+        self.rightWeightsMeanLabel = None
+
+    def callback(self):
+        self.root.quit()
+
+    def update_weights_mean(self, weights_mean):
+        self.leftWeightsMeanLabel.labelText = "%.4f" % weights_mean[0]
+        self.rightWeightsMeanLabel.labelText = "%.4f" % weights_mean[1]
+
+
+    def run(self):
+        self.root = tk.Tk()
+        self.root.wm_title("Cockpit")
+
+        self.viewmodel.initializeViewModel()
+        self.root.protocol("WM_DELETE_WINDOW", self.callback)
+
+        # Create GUI Elements
+        learnCheckbutton = tk.Checkbutton(self.root, text="Learn", var=self.viewmodel.learn)
+        resetCar = tk.Button(self.root, text = "Reset Car", command=self.viewmodel.reset_car_command)
+        constantWeightsTextBox = tk.Text(self.root, height=1, width=20)
+        resetWeights = tk.Button(self.root, text="Reset Weights", command=self.viewmodel.reset_weights_command)
+        self.leftWeightsMeanLabel = tk.Label(self.root, text="left", textvariable=self.viewmodel.weights_mean_left)
+        self.rightWeightsMeanLabel = tk.Label(self.root, text="right", textvariable=self.viewmodel.weights_mean_right)
+
+        # Arrange GUI Elements
+        learnCheckbutton.grid(row=0, column=0)
+        resetCar.grid(row=1, column=0)
+        resetWeights.grid(row=2, column=0)
+        # constantWeightsTextBox.grid(row=2, column=1)
+        self.leftWeightsMeanLabel.grid(row=3, column=0)
+        self.rightWeightsMeanLabel.grid(row=3, column=1)
+
+        self.root.mainloop()
+
+
 def main(argv):
+
     parser = create_argument_parser()
     n = parser.parse_args()
 
@@ -407,15 +511,32 @@ def main(argv):
     window = cv2.namedWindow('Cam', cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window, w * 4, h * 4)
 
-   # try:
+    cockpit = CockpitViewModel(net)
+
+    if n.log:
+        compressed = False
+        maxbytes = 100 * 2**10
+        logger = create_weights_logger(compressed,maxbytes)
+        logperiod = 1 # log every 'logPeriod' seconds
+
+        starttime = time.time()
+        periodstarttime = starttime
+
     while True:
-        # print node.is_set_back
         if node.is_set_back:
             net.spikes = np.zeros((NUM_RL_NEURONS, NUM_TRACE_STEPS), dtype='int32')
             net.eligibility_trace = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_OUT_LEARNING_LAYER))
-            #Here: Every n minutes save new weights!
-            np.savetxt('/fzi/ids/mlprak2/no_backup/test_weights.out',net.weights)
-            node.is_set_back = False
+
+        if n.log:
+            now = time.time()
+            timepassed = now - starttime
+            timepassedperiod = now - periodstarttime
+
+            if timepassedperiod >= logperiod:
+                log_weights(logger, timepassed, net.weights)
+                periodstarttime = time.time()
+
+        node.is_set_back = False
         cv2.imshow('weights',cv2.resize(net.weights / 1000 ,(0,0), fx=100, fy=10,interpolation=cv2.INTER_NEAREST))
         frame = node.last_frame
         gas, brake, angle = net.inject(frame, node.lanelet_information)
@@ -425,7 +546,10 @@ def main(argv):
         cv2.waitKey(1)
 
         node.publish(gas, brake, angle)
-        net.learn(node.lanelet_information, angle)
+
+        if net.learn:
+            net.update_weights(node.lanelet_information, angle)
+            cockpit.update_weights_mean()
 
 
 if __name__ == '__main__':

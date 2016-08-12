@@ -5,6 +5,7 @@ import time
 
 import logging
 
+
 class SizedTimedRotatingFileHandler(handlers.TimedRotatingFileHandler):
     """
     Handler for logging to a set of files, which switches from one file
@@ -42,6 +43,7 @@ class SizedTimedRotatingFileHandler(handlers.TimedRotatingFileHandler):
         if t >= self.rolloverAt:
             return 1
         return 0
+
 
 def main(argv):
     log_filename = './log_rotate.txt'
