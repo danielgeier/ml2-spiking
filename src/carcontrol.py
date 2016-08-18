@@ -29,15 +29,17 @@ class CarControlNode:
         self.oldsec = time.time()
         # Disable signals so PyCharm's rerun button works
         rospy.init_node(self.node_name, disable_signals=True)
+        self.service = rospy.Service('reset_car', reset_car, self.handle_reset_car)
 
-        self.sub_carPose = rospy.Subscriber('/AADC_AudiTT/carPose', Pose, self.car_off_map)
-        self.sub_carDist = rospy.Subscriber('/laneletInformation', Float64MultiArray, self.update_car_state)
+        self.sub_carPose = rospy.Subscriber('/AADC_AudiTT/carPose', Pose, self.car_off_map, queue_size=1)
+        self.sub_carDist = rospy.Subscriber('/laneletInformation', Float64MultiArray, self.update_car_state, queue_size=1)
         self.pub_carModel = rospy.Publisher('/gazebo/set_model_state', ModelState, queue_size=1)
         self.pub_carUpdate = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
         self.pub = rospy.Publisher('/AADC_AudiTT/carPoseSet', Pose, queue_size=1)
         self.pub_is_set_back = rospy.Publisher('/AADC_AudiTT/isSetBack', Bool, queue_size=1)
         self.lanelet_information = None
         self.reset = False
+
 
     def random_pose(self):
         rospy.wait_for_service('random_pos_service')
@@ -48,7 +50,7 @@ class CarControlNode:
             starting_position = Point(p[0], p[1], GAZEBO_Z)
             orientation = Quaternion(p[2], p[3], p[4], p[5])
             pose = Pose(starting_position, orientation)
-            return pose
+            return {'pose': pose, 'list': p}
         except rospy.ServiceException, e:
             print "Service call failed: %s"%e
 
@@ -83,8 +85,8 @@ class CarControlNode:
 
     def reset_car_pose(self):
         print 'isch runnergfalle oder zu lang wegg'
-
-        pose = self.random_pose()
+        res = self.random_pose()
+        pose = res['pose']
 
         #change in Starting_pose when using one- or nocrossing
         self.pub.publish(pose)
@@ -97,9 +99,15 @@ class CarControlNode:
         modelState.twist = Twist(Vector3(0,0,0),Vector3(0,0,0))
         self.pub_carModel.publish(modelState)
 
+        return res
+
     def reset_car_update(self):
         print 'Speed and Angle reset'
         self.pub_carUpdate.publish(STARTING_ARGS)
+
+    def handle_reset_car(self, req):
+        res = self.reset_car_pose()
+        return reset_carResponse(res['list'])
 
 
 if __name__ == '__main__':

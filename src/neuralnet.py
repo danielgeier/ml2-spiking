@@ -14,6 +14,7 @@ from pyNN.nest.projections import Projection
 from pyNN.random import RandomDistribution
 from sensor_msgs.msg import Image
 from snn_plotter.proxy import PlotterProxy
+from vehicle_control.srv import *
 
 import os
 import time
@@ -78,9 +79,9 @@ class SpikingNetworkNode:
         self.is_set_back = None
         rospy.init_node(self.node_name, disable_signals=True)
         self.bridge = CvBridge()
-        self.sub = rospy.Subscriber('/spiky/retina_image', Image, self.save_frame)
-        self.sub_lanelet = rospy.Subscriber('/laneletInformation', Float64MultiArray, self.update_car_state)
-        self.sub_is_set_back = rospy.Subscriber('/AADC_AudiTT/isSetBack', Bool, self.set_param_back)
+        self.sub = rospy.Subscriber('/spiky/retina_image', Image, self.save_frame, queue_size=1)
+        self.sub_lanelet = rospy.Subscriber('/laneletInformation', Float64MultiArray, self.update_car_state, queue_size=1)
+        self.sub_is_set_back = rospy.Subscriber('/AADC_AudiTT/isSetBack', Bool, self.set_param_back, queue_size=1)
         self.pub = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
         self.last_frame = None
         self.last_distance = None
@@ -168,13 +169,11 @@ class SpikingNetwork:
         self.pop_out_r = Population(1, IF_curr_alpha, {'tau_refrac': 0.1, 'v_thresh': -50.})
 
         # Connections
-
         self.projection_layer2_l = Projection(self.pop_in_l, self.pop_in_l2, FromListConnector(conn_list_l))
         self.projection_layer2_r = Projection(self.pop_in_r, self.pop_in_r2, FromListConnector(conn_list_r))
 
         self.projection_layer2_l.setWeights(1.0)
         self.projection_layer2_r.setWeights(1.0)
-
 
         self.projection_out_l = Projection(self.pop_in_l2, self.pop_out_l, AllToAllConnector())
         self.projection_out_r = Projection(self.pop_in_r2, self.pop_out_r, AllToAllConnector())
@@ -183,8 +182,8 @@ class SpikingNetwork:
         self.projection_out_r.setWeights(1.0)
 
         # bild mitte doppelt gewichtet
-       # self.projection_out_l[3].setWeights(2.0)
-        #self.projection_out_r[2].setWeights(2.0)
+        # self.projection_out_l[3].setWeights(2.0)
+        # self.projection_out_r[2].setWeights(2.0)
         self.projection_out_l[3]._set_weight(2.0)
         self.projection_out_r[2]._set_weight(2.0)
 
@@ -194,7 +193,6 @@ class SpikingNetwork:
         nest.nest.Connect(self.pop_out_r[0], self.spikedetector_right)
 
         # net2 for Learning
-
         self.pop_learning_mid = Population(NUM_MIDDLE_LEARNING_LAYER, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(NUM_MIDDLE_LEARNING_LAYER)})#'v_thresh' : -64})
         self.pop_learning_out = Population(2, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(2)})
 
@@ -257,7 +255,7 @@ class SpikingNetwork:
         self.pop_in_l.set(i_offset=frame_l.astype(float).flatten())
         self.pop_in_r.set(i_offset=frame_r.astype(float).flatten())
 
-        tstop = 50.0 #
+        tstop = 100.0 #
         nest.run(tstop)
         nest.end()
 
@@ -356,6 +354,15 @@ class SpikingNetwork:
         #self.weights += LEARNING_RATE * self.reward * self.eligibility_trace
         self.projection_learning_out.setWeights(self.weights / 1000)
 
+    def reset_car(self):
+        rospy.wait_for_service('reset_car')
+        try:
+            reset_car_call = rospy.ServiceProxy('reset_car', reset_car)
+            pose = reset_car_call(0)
+            print pose
+        except rospy.ServiceException, e:
+            print "Service call failed: %s" % e
+
 
 class SizedTimedRotatingFileHandler(handlers.TimedRotatingFileHandler):
     """
@@ -444,17 +451,14 @@ class CockpitViewModel:
         self.weights_mean_left.set(formatstring % weights_mean[0])
         self.weights_mean_right.set(formatstring % weights_mean[1])
 
-
     def reset_car_command(self):
-        print "reset car"
+        self.net.reset_car()
 
     def reset_weights_command(self):
         self.net.reset_weights()
-        print "weights reset!"
 
     def learn_changed(self, *args):
         self.net.learn = not self.net.learn
-        print "learn = %s" % self.net.learn
 
 
 class Cockpit(threading.Thread):
@@ -485,6 +489,7 @@ class Cockpit(threading.Thread):
         resetCar = tk.Button(self.root, text = "Reset Car", command=self.viewmodel.reset_car_command)
         constantWeightsTextBox = tk.Text(self.root, height=1, width=20)
         resetWeights = tk.Button(self.root, text="Reset Weights", command=self.viewmodel.reset_weights_command)
+
         self.leftWeightsMeanLabel = tk.Label(self.root, text="left", textvariable=self.viewmodel.weights_mean_left)
         self.rightWeightsMeanLabel = tk.Label(self.root, text="right", textvariable=self.viewmodel.weights_mean_right)
 
@@ -517,7 +522,7 @@ def main(argv):
         compressed = False
         maxbytes = 100 * 2**10
         logger = create_weights_logger(compressed,maxbytes)
-        logperiod = 1 # log every 'logPeriod' seconds
+        logperiod = 15 * 60 # log every 'logPeriod' seconds
 
         starttime = time.time()
         periodstarttime = starttime
