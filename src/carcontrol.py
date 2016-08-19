@@ -67,7 +67,7 @@ class CarControlNode:
             self.reset_car_pose()
 
     def car_off_lane(self):
-        if self.lanelet_information is None or self.lanelet_information.isOnLane:
+        if self.lanelet_information is None or self.lanelet_information.is_on_lane:
             self.oldsec = time.time()
 
         if self.reset:
