@@ -79,6 +79,10 @@ class Learner:
     def network(self):
         return self._network
 
+    @network.setter
+    def network(self, value):
+        self._network = value
+
     @property
     def world(self):
         return self._world
@@ -108,23 +112,37 @@ class ReinforcementLearner(Learner):
         self._learningrate_delta = learningrate_delta
         self._discount_factor = discount_factor
 
-        self._connections = nest.nest.GetConnections(target=self.network.postsynaptic_learning_neurons)
-        self._eligibility_trace = np.zeros(len(self._connections))
-
-        # Initialize spike dictionary for each post
         self._spikes = {}
         self._neurons = set([])
-        self._weights = self.network.get_weights()
+        self._weights = None
+        self._connections = None
 
-        # Extract all relevant neurons, i.e. all neurons connected with postsynaptic learning neurons and
-        # postsynaptic neurons themselves
-        for connection in self._connections:
-            self._neurons.add(connection[0])
-            self._neurons.add(connection[1])
+        self._prepare_learner()
 
-        for neuron in self._neurons:
-            # we trace one more step, since we need the steps_to_trace last steps and the current step
-            self._spikes[neuron] = np.zeros(steps_to_trace + 1)
+    def _prepare_learner(self):
+        if self.network is not None:
+            self._connections = nest.nest.GetConnections(target=self.network.postsynaptic_learning_neurons)
+            self._eligibility_trace = np.zeros(len(self._connections))
+
+            # Initialize spike dictionary for each post
+            self._spikes = {}
+            self._neurons = set([])
+            self._weights = self.network.get_weights()
+
+            # Extract all relevant neurons, i.e. all neurons connected with postsynaptic learning neurons and
+            # postsynaptic neurons themselves
+            for connection in self._connections:
+                self._neurons.add(connection[0])
+                self._neurons.add(connection[1])
+
+            for neuron in self._neurons:
+                # we trace one more step, since we need the steps_to_trace last steps and the current step
+                self._spikes[neuron] = np.zeros(self._steps_to_trace + 1)
+
+    @Learner.network.setter
+    def network(self, value):
+        self._network = value
+        self._prepare_learner()
 
     def learn(self):
         self._update_spikes()
@@ -134,8 +152,8 @@ class ReinforcementLearner(Learner):
         print "w: ", self._weights
 
     def _update_spikes(self):
-        # TODO: This might be slower than previous implementation ... it would be better to sort
-        # the neurons and use the permutation for a matrix instead of looking up stuff in a dictionary
+        # TODO: This might be slower than previous implementation. It would be better to sort
+        # TODO: ... the neurons and use the permutation for a matrix instead of looking up stuff in a dictionary
         events_spike_detectors = nest.nest.GetStatus([self.network.detectors[x] for x in self._neurons], keys='events')
         senders = set([])
         for event in events_spike_detectors:
@@ -172,7 +190,6 @@ class ReinforcementLearner(Learner):
             zeta = np.sum(self._spikes[presyn_neuron][:-1] * decay)
             if self._spikes[postsyn_neuron][-1] > 0:
                 zeta *= self._beta_sigma
-
             else:
                 zeta *= -self._beta_sigma * self._sigma/(1.0 - self._sigma)
 
@@ -189,14 +206,20 @@ class BaseNetwork:
     """ Defines a basic network with an input layer """
     __metaclass__ = ABCMeta
 
-    def __init__(self, timestep, simduration, width, height):
+    def __init__(self, timestep, simduration, learner, should_learn=True):
 
         self._timestep = timestep
         self._simduration = simduration
         self._detectors = {}
         self._weights = None
-        self._width = width
-        self._height = height
+
+        self._learner = learner
+        self._postsynaptic_learning_neurons = []
+
+        if self._learner is not None:
+            self._learner.network = self
+
+        self._should_learn = should_learn
 
         # Populations
         self.pop_input_image_r = None
@@ -206,6 +229,20 @@ class BaseNetwork:
 
         self.spikedetector_enc_image_l = None
         self.spikedetector_enc_image_r = None
+
+        # Preparing sensory information subscriber
+        rospy.init_node('SNN', disable_signals=True)
+        self._bridge = CvBridge()
+        self._last_frame = None
+        self._retina_image_subscriber = rospy.Subscriber('/spiky/retina_image', Image, self._handle_frame, queue_size=1)
+        rospy.wait_for_message('/spiky/retina_image', Image)
+
+        if self._last_frame is not None:
+            shape = np.shape(self._last_frame)
+            self._width = shape[0]
+            self._height = shape[1]
+
+        self._car_update_publisher = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
 
         self._build_input_layer()
         self._create_spike_detectors()
@@ -267,9 +304,16 @@ class BaseNetwork:
         self.projection_out_l.setWeights(1.0)
         self.projection_out_r.setWeights(1.0)
 
+        # bild mitte doppelt gewichtet
+        self.projection_out_l[2]._set_weight(2.0)
+        self.projection_out_r[3]._set_weight(2.0)
+
+    def _handle_frame(self, frame):
+        self._last_frame = self._bridge.imgmsg_to_cv2(frame)
+
     def populate_plotter(self, plotter):
-        plotter.add_spike_train_plot(self.pop_encoded_image_l, label='Encoded Image Left')
-        plotter.add_spike_train_plot(self.pop_encoded_image_r, label='Encoded Image Right')
+        plotter.add_spike_train_plot(self.pop_encoded_image_l, label='Input Left')
+        plotter.add_spike_train_plot(self.pop_encoded_image_r, label='Input Right')
 
     def _create_spike_detectors(self):
         self.spikedetector_enc_image_l = nest.nest.Create('spike_detector', params={'withgid': True, 'withtime': True})[0]
@@ -280,6 +324,28 @@ class BaseNetwork:
 
         self.detectors[self.pop_encoded_image_l[0]] = self.spikedetector_enc_image_l
         self.detectors[self.pop_encoded_image_r[0]] = self.spikedetector_enc_image_r
+
+    @property
+    def should_learn(self):
+        return self._should_learn
+
+    @should_learn.setter
+    def should_learn(self, value):
+        self._should_learn = value
+
+    @property
+    def last_frame(self):
+        return self._last_frame
+
+    @property
+    def learner(self):
+        return self._learner
+
+    @learner.setter
+    def learner(self, value):
+        self._learner = value
+        if self._learner is not None:
+            self._learner.network = self
 
     @property
     def encoded_image_pops(self):
@@ -321,11 +387,30 @@ class BaseNetwork:
     def decode_actions(self):
         pass
 
-    @abstractmethod
+    @property
     def postsynaptic_learning_neurons(self):
-        pass
+        return self._postsynaptic_learning_neurons
 
-    def inject_frame(self, frame, lanelet_information):
+    def step(self):
+        self.inject_frame(self._last_frame)
+        self.simulate()
+
+        if self.should_learn:
+            if self._learner is not None:
+                self._learner.learn()
+            else:
+                print "WARNING: should_learn = true but learner is None"
+
+        self.act()
+
+    def act(self):
+        actions = self.decode_actions()
+        gas = actions['gas']
+        brake = actions['brake']
+        steering_angle = actions['steering_angle']
+        self._car_update_publisher.publish(gas, brake, steering_angle)
+
+    def inject_frame(self, frame):
         frame_l = frame[0:50, 0:50]
         frame_r = frame[0:50, 50:100]
 
@@ -341,13 +426,12 @@ class BaseNetwork:
 
 
 class BraitenbergNetwork(BaseNetwork):
-    def __init__(self, timestep, simduration, width, height):
-        super(BraitenbergNetwork, self).__init__(timestep, simduration, width, height)
+    def __init__(self, timestep, simduration, learner, should_learn=True):
+        super(BraitenbergNetwork, self).__init__(timestep, simduration, learner, should_learn)
 
         self._output_pop = None
         self._left_connection = None
         self._right_connection = None
-        self._postsynaptic_learning_neurons = []
 
         self._build_network()
 
@@ -373,14 +457,9 @@ class BraitenbergNetwork(BaseNetwork):
         # adapted by a learner. In this case, we only want to adapt
         # the presynaptic connections of the output neurons.
         for neuron in self._output_pop:
-            self._postsynaptic_learning_neurons.append(neuron)
+            self.postsynaptic_learning_neurons.append(neuron)
 
         self.reset_weights()
-
-    @property
-    def postsynaptic_learning_neurons(self):
-        return self._postsynaptic_learning_neurons
-
 
     def populate_plotter(self, plotter):
         super(BraitenbergNetwork, self).populate_plotter(plotter)
@@ -391,7 +470,8 @@ class BraitenbergNetwork(BaseNetwork):
         return self._output_pop
 
     def reset_weights(self):
-        weights = np.random.rand(2, 2)*1000
+        # weights = np.random.rand(2, 2) * 1000
+        weights = np.array([[0, 1],[1, 0]])*1000
         self.set_weights(weights)
 
     def get_weights(self):
@@ -478,8 +558,66 @@ class World(BaseWorld):
 
 
 class DeepNetwork(BaseNetwork):
-    def __init__(self, timestep, simduration):
+    def __init__(self, timestep, simduration, number_middle_layers, number_neurons_per_layer, num_out_learning=2):
+        #copied Braitenberg
         super(DeepNetwork, self).__init__(timestep, simduration)
+        self._output_pop = None
+        self._middle_pop = None
+        self._left_in_connection = None
+        self._right_in_connection = None
+        self._middle_connection = None
+        self._left_out_connection = None
+        self._right_out_connection = None
+        self._postsynaptic_learning_neurons = []
+        self._number_neurons_per_layer = number_neurons_per_layer
+        self._num_out_learning = num_out_learning
+        self.number_middle_layers = number_middle_layers
+        self._build_network()
+
+    def _build_network(self):
+        self._output_pop = Population(self._num_out_learning, IF_curr_alpha,
+                                    {'tau_refrac': 0.1, 'i_offset': np.zeros(self._number_neurons_per_layer)})
+        l = self.encoded_image_pops['left']
+        r = self.encoded_image_pops['right']
+        # Appends versatile number of middle layers
+        for i in range(self.number_middle_layers):
+            self._middle_pop[i] = Population(self._number_neurons_per_layer, IF_curr_alpha,
+                                          {'tau_refrac': 0.1, 'i_offset': np.zeros(self._num_out_learning)})
+            if i == 0:
+                # Connect input layer to first middle layer
+                self._left_in_connection = Projection(l, self._middle_pop[i], AllToAllConnector())
+                self._right_in_connection = Projection(r, self._middle_pop[i], AllToAllConnector())
+            else:
+                # Connect latest middle layer to current
+                self._middle_connection[i] = Projection(self._middle_pop[i-1], self._middle_pop[i], AllToAllConnector())
+
+            for j in range(self._number_neurons_per_layer):
+                detector = nest.nest.Create('spike_detector')[0]
+                self.detectors[self._middle_pop[i][j]] = detector
+                nest.nest.Connect(self._middle_pop[i][j], detector)
+
+        #Connect last middle layer to output
+        self._left_out_connection = Projection(self._middle_pop[self.number_middle_layers-1], self._output_pop, AllToAllConnector())
+        self._right_out_connection = Projection(self._middle_pop[self.number_middle_layers-1], self._output_pop, AllToAllConnector())
+        self.spikedetector_deep_out = np.ndarray(2, dtype='int32')
+
+        for neuron in self._output_pop:
+            self.detectors[neuron] = nest.nest.Create('spike_detector')[0]
+            nest.nest.Connect(neuron, self.spikedetector_deep_out[i])
+
+        #  Here go the neurons whose presynaptic connections are
+        # adapted by a learner. In this case, we only want to adapt
+        # the presynaptic connections of the output neurons.
+        for pop in self._middle_pop:
+            for neuron in pop:
+                self._postsynaptic_learning_neurons.append(neuron)
+
+        self.reset_weights()
+
+    def reset_weights(self):
+        vthresh_distr_1 = RandomDistribution('uniform', [0.1, 2])
+        self.self._left_out_connection.setWeights(vthresh_distr_1)
+        self.self._right_out_connection.setWeights(vthresh_distr_1)
 
 
 class NetworkPlotter:
@@ -490,304 +628,6 @@ class NetworkPlotter:
 
     def update(self):
         self._plotter.update(nest.get_current_time())
-
-
-class SpikingNetworkNode:
-    """Get retina images and store them. Publish to Gazebo."""
-
-    def __init__(self):
-        # type: () -> SpikingNetworkNode
-        # Most recent time step is in last array position
-        # Neurons in row, spikes for current time step in column
-        #self.spikes = np.zeros((NUM_IN_LEARNING_LAYER + NUM_RL_NEURONS, NUM_TRACE_STEPS),dtype='int32')
-        self.node_name = 'spiking_neuralnet'
-        self.is_set_back = None
-        rospy.init_node(self.node_name, disable_signals=True)
-        self.bridge = CvBridge()
-        self.sub = rospy.Subscriber('/spiky/retina_image', Image, self.save_frame, queue_size=1)
-        self.sub_lanelet = rospy.Subscriber('/laneletInformation', Float64MultiArray, self.update_car_state, queue_size=1)
-        self.sub_is_set_back = rospy.Subscriber('/AADC_AudiTT/isSetBack', Bool, self.set_param_back, queue_size=1)
-        self.pub = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
-        self.last_frame = None
-        self.last_distance = None
-        self.lanelet_information = None
-        # Make sure we get at least one frame
-        rospy.wait_for_message('/spiky/retina_image', Image)
-        # Make sure it is grayscale
-        assert len(self.last_frame.shape) == 2
-
-    def save_frame(self, ros_image):
-        self.last_frame = self.bridge.imgmsg_to_cv2(ros_image)
-
-    def publish(self, gas, brake, steering_angle):
-        self.pub.publish(gas, brake, steering_angle)
-
-    def update_car_state(self, lanelet_info):
-        if len(lanelet_info.data) > 0:
-            self.lanelet_information = LaneletInformation(lanelet_info.data)
-            self.last_distance = lanelet_info.data[0]
-
-    def set_param_back(self, isSetBack):
-        self.is_set_back = isSetBack.data
-
-
-class SpikingNetwork:
-    def __init__(self, width, height, plot):
-        # Most recent time step is in last array position
-        # Neurons in row, spikes for current time step in column
-        self.spikes = np.zeros((NUM_RL_NEURONS, NUM_TRACE_STEPS), dtype='int32')
-        self.reward = 0
-        self.last_distance = 0
-        nest.setup(timestep=TIME_STEP)
-        self.eligibility_trace = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_OUT_LEARNING_LAYER))
-        self.weights = np.zeros((NUM_MIDDLE_LEARNING_LAYER, NUM_OUT_LEARNING_LAYER))
-        self.learningrate_fakt = LEARNING_RATE
-
-        # Flags
-        self.plot = plot
-        self.learn = True
-
-        num_neurons = width * height
-
-        self.sum_spikes_l = 0
-        self.sum_spikes_r = 0
-
-        self.pop_in_l = Population(num_neurons // 2, IF_curr_alpha, {'i_offset': np.zeros(num_neurons // 2)})
-        self.pop_in_r = Population(num_neurons // 2, IF_curr_alpha, {'i_offset': np.zeros(num_neurons // 2)})
-
-        # layer 2 links
-        self.pop_in_l2 = Population(4, IF_curr_alpha, {'i_offset': np.zeros(4), 'v_thresh': 100})
-        conn_list_l = []
-        for neuron in self.pop_in_l:
-            neuron = neuron - self.pop_in_l.first_id
-            if (neuron % 50) <= 25 and neuron <= 1250: # oben links
-                conn_list_l.append((neuron, 0, 1.0, 0.1))
-
-            if (neuron % 50) > 25 and neuron <= 1250: # oben rechts
-                conn_list_l.append((neuron, 1, 1.0, 0.1))
-
-            if (neuron % 50) <= 25 and neuron > 1250: # unten links
-                conn_list_l.append((neuron, 2, 1.0, 0.1))
-
-            if (neuron % 50) > 25 and neuron > 1250: # unten rechts   DOPPELT gewichtet
-                conn_list_l.append((neuron, 3, 1.0, 0.1))
-
-        # layer2 rechts
-        self.pop_in_r2 = Population(4, IF_curr_alpha, {'i_offset': np.zeros(4), 'v_thresh': 100})
-        conn_list_r = []
-        for neuron in self.pop_in_r:
-            neuron = neuron - self.pop_in_r.first_id
-            if (neuron % 50) <= 25 and neuron <= 1250: # oben links
-                conn_list_r.append((neuron, 0, 1.0, 0.1))
-
-            if (neuron % 50) > 25 and neuron <= 1250: # oben recht
-                conn_list_r.append((neuron, 1, 1.0, 0.1))
-
-            if (neuron % 50) <= 25 and neuron > 1250: #unten links DOPPELT gewichtet
-                conn_list_r.append((neuron, 2, 1.0, 0.1))
-
-            if (neuron % 50) > 25 and neuron > 1250: # unten rechts
-                conn_list_r.append((neuron, 3, 1.0, 0.1))
-
-        # Layer 3 output
-        self.pop_out_l = Population(1, IF_curr_alpha, {'tau_refrac': 0.1, 'v_thresh': -50.})
-        self.pop_out_r = Population(1, IF_curr_alpha, {'tau_refrac': 0.1, 'v_thresh': -50.})
-
-        # Connections
-        self.projection_layer2_l = Projection(self.pop_in_l, self.pop_in_l2, FromListConnector(conn_list_l))
-        self.projection_layer2_r = Projection(self.pop_in_r, self.pop_in_r2, FromListConnector(conn_list_r))
-
-        self.projection_layer2_l.setWeights(1.0)
-        self.projection_layer2_r.setWeights(1.0)
-
-        self.projection_out_l = Projection(self.pop_in_l2, self.pop_out_l, AllToAllConnector())
-        self.projection_out_r = Projection(self.pop_in_r2, self.pop_out_r, AllToAllConnector())
-
-        self.projection_out_l.setWeights(1.0)
-        self.projection_out_r.setWeights(1.0)
-
-        # bild mitte doppelt gewichtet
-        # self.projection_out_l[3].setWeights(2.0)
-        # self.projection_out_r[2].setWeights(2.0)
-        self.projection_out_l[3]._set_weight(2.0)
-        self.projection_out_r[2]._set_weight(2.0)
-
-        # Create Detectors
-        self.spikedetector_left = nest.nest.Create('spike_detector')[0]
-        self.spikedetector_right = nest.nest.Create('spike_detector')[0]
-        nest.nest.Connect(self.pop_out_l[0], self.spikedetector_left)
-        nest.nest.Connect(self.pop_out_r[0], self.spikedetector_right)
-
-        # net2 for Learning
-        self.pop_learning_mid = Population(NUM_MIDDLE_LEARNING_LAYER, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(NUM_MIDDLE_LEARNING_LAYER)})#'v_thresh' : -64})
-        self.pop_learning_out = Population(2, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(2)})
-
-        self.spikedetector_l_out = np.ndarray(2,dtype='int32')
-        for i in range(2):
-            self.spikedetector_l_out[i] = nest.nest.Create('spike_detector')[0]
-            nest.nest.Connect(self.pop_learning_out[i], self.spikedetector_l_out[i])
-
-        self.spikedetector_l_mid = np.ndarray(NUM_MIDDLE_LEARNING_LAYER,dtype='int32')
-        for i in range(NUM_MIDDLE_LEARNING_LAYER):
-            self.spikedetector_l_mid[i] = nest.nest.Create('spike_detector')[0]
-            nest.nest.Connect(self.pop_learning_mid[i], self.spikedetector_l_mid[i])
-
-        #self.all_detectors = np.append([self.spikedetector_left, self.spikedetector_right], self.spikedetector_l_mid)
-        #self.all_detectors = np.append(self.all_detectors, self.spikedetector_l_out)
-        self.all_detectors = np.append(self.spikedetector_l_mid,self.spikedetector_l_out)
-        self.all_detectors = list(self.all_detectors)
-
-        # Connect Layers
-        self.projection_in_links = Projection(self.pop_out_l, self.pop_learning_mid,  AllToAllConnector())
-        self.projection_in_rechts = Projection(self.pop_out_r, self.pop_learning_mid, AllToAllConnector())
-        self.projection_learning_out = Projection(self.pop_learning_mid, self.pop_learning_out, AllToAllConnector())
-
-        vthresh_distr_1 = RandomDistribution('uniform', [0.1, 2])
-        self.projection_in_links.setWeights(vthresh_distr_1)
-        self.projection_in_rechts.setWeights(vthresh_distr_1)
-
-        self.reset_weights()
-
-        if self.plot:
-            plot_steps = 10
-            self.proxy = PlotterProxy(20., plot_steps)
-            self.proxy.add_spike_train_plot(self.pop_out_l, label='Learning In_L')
-            self.proxy.add_spike_train_plot(self.pop_out_r, label='Learning In_R')
-            self.proxy.add_spike_train_plot(self.pop_learning_mid, label='Learning Mid')
-            self.proxy.add_spike_train_plot(self.pop_learning_out, label='Learning Out')
-
-    def calc_reward(self, lanelet_information, angle):
-
-        isOnLanelet = lanelet_information.is_on_lane
-        reward = 0
-        distance = lanelet_information.distance
-        if isOnLanelet:
-            reward = (1-distance)
-        else:
-            if (lanelet_information.is_left and angle < 0) or (lanelet_information.is_right and angle > 0):
-                reward = 0.1
-            else:
-                reward = -10. * (distance + 1) * (abs(angle)+1)
-
-        if reward < -20:
-            reward = -20
-
-        return reward
-
-    def inject(self, frame, lanelet_information):
-        frame_l = frame[0:50, 0:50]
-        frame_r = frame[0:50, 50:100]
-
-        self.pop_in_l.set(i_offset=frame_l.astype(float).flatten())
-        self.pop_in_r.set(i_offset=frame_r.astype(float).flatten())
-
-        tstop = 100.0
-        nest.run(tstop)
-        nest.end()
-
-        if self.plot:
-            self.proxy.update(nest.get_current_time())
-
-        self.spikes[:, 0] = nest.nest.GetStatus(self.all_detectors, 'n_events')
-
-        nest.nest.SetStatus(self.all_detectors, 'n_events', 0)
-
-        self.spikes = np.roll(self.spikes, -1, axis=1)
-
-        # print 'spikes', self.spikes
-        if lanelet_information is not None:
-            distance = lanelet_information.distance
-        else:
-            distance = -1
-
-        num_spikes_l = self.spikes[-1,-1]
-        num_spikes_r = self.spikes[-2,-1]
-
-        num_spikes_diff = num_spikes_l - num_spikes_r
-        # TODO ensure -1 <= angle <= 1
-        angle = num_spikes_diff / 10 # minus = rechts
-        brake = 0  # np.exp(abs(angle)) - 1
-        gas = 1 / (abs(angle) + 2.5)
-        print 'l {:3d} | r {:3d} | diff {:3d} | gas {:2.2f} | brake {:2.2f} | steer {:2.2f} | distance {:3.4f} |reward {:3.2f}'.format(
-            num_spikes_l,
-            num_spikes_r,
-            num_spikes_diff,
-            gas,
-            brake,
-            angle,
-            distance,
-            self.reward)
-
-        return gas, brake, angle
-
-    def calc_eligibility_change(self):
-        # Only check if neurons spiked or not
-        spikes = self.spikes.copy()
-        spikes[spikes >= 1] = 1
-
-        # Arrange the NUM_NEURONS presynaptic spikes for each neuron at each time step (except last time step).
-        presynaptic = np.tile(spikes[..., :-1], (NUM_RL_NEURONS, 1, 1))
-        # Exponential decay factor for postsynaptic spikes
-        decay = np.exp(-np.arange(NUM_TRACE_STEPS - 1) * TIME_STEP / TAU)[::-1]
-        change_elig = presynaptic * decay
-        # Sum over time. Calculate the weighted incoming presynaptic spikes at each neuron connection.
-        change_elig = np.sum(change_elig, axis=2)
-
-        # Eligiblity sign depends on whether the postsynaptic neuron spikes.
-        postsynaptic = np.tile(spikes[..., 0], (NUM_RL_NEURONS, 1)).T
-        change_elig[postsynaptic == 1] *= BETA_SIGMA
-        change_elig[postsynaptic == 0] *= -BETA_SIGMA * SIGMA / (1 - SIGMA)
-
-        return change_elig[0:NUM_MIDDLE_LEARNING_LAYER,NUM_MIDDLE_LEARNING_LAYER:NUM_RL_NEURONS]
-        # change_elig[i, j] is now the eligibility trace change for the connection from i to j
-        # TODO: check if actual connection exists
-
-    def reset_weights(self):
-        oldlearn = self.learn
-        self.learn = False
-
-        random_distribution = RandomDistribution('uniform', [0.1, 2])
-        self.projection_learning_out.setWeights(random_distribution)
-        # initialize weights for learning
-        i = 0
-        for neuron in self.pop_learning_out:
-            # Skip detector
-            if i > 1:
-                break
-            target_con = nest.nest.GetConnections(target=[neuron])
-            weights = nest.nest.GetStatus(target_con, 'weight')
-            j = 0
-            for w in weights:
-                self.weights[j,i] = w
-                j += 1
-            i += 1
-
-        self.learn = oldlearn
-
-    def update_weights(self, lanlet_information, angle):
-
-        self.reward = self.calc_reward(lanlet_information, angle)
-
-        self.eligibility_trace *= DISCOUNT_FACTOR
-        self.eligibility_trace += self.calc_eligibility_change()
-
-        # print 'weights:',self.weights
-        # print 'elig:',self.eligibility_trace
-        # print 'reward:',reward
-
-        self.learningrate_fakt -= self.learningrate_fakt/100
-        self.weights += self.learningrate_fakt * self.reward * self.eligibility_trace
-        #self.weights += LEARNING_RATE * self.reward * self.eligibility_trace
-        self.projection_learning_out.setWeights(self.weights / 1000)
-
-    def reset_car(self):
-        rospy.wait_for_service('reset_car')
-        try:
-            reset_car_call = rospy.ServiceProxy('reset_car', reset_car)
-            pose = reset_car_call(0)
-            print pose
-        except rospy.ServiceException, e:
-            print "Service call failed: %s" % e
 
 
 class SizedTimedRotatingFileHandler(handlers.TimedRotatingFileHandler):
@@ -852,10 +692,10 @@ def log_weights(logger, current_time, weights, formatstring='%.3f'):
 
 class CockpitViewModel:
     def __init__(self, net):
-        self.view = Cockpit(self)
+        self.view = CockpitView(self)
 
         # Traced variables
-        self.learn = None
+        self.should_learn = None
         self.weights_mean_left = None
         self.weights_mean_right = None
 
@@ -863,13 +703,13 @@ class CockpitViewModel:
         self.view.start()
         self.net = net
 
-    def initializeViewModel(self):
-        self.learn = Tk.BooleanVar()
-        self.learn.set(self.net.learn)
+    def initialize_view_model(self):
+        self.should_learn = Tk.BooleanVar()
+        self.should_learn.set(self.net.should_learn)
         self.weights_mean_left = Tk.StringVar()
         self.weights_mean_right = Tk.StringVar()
 
-        self.learn.trace("w", self.learn_changed)
+        self.should_learn.trace("w", self.learn_changed)
 
     def update_weights_mean(self):
         formatstring = "%.4f"
@@ -878,7 +718,13 @@ class CockpitViewModel:
         self.weights_mean_right.set(formatstring % weights_mean[1])
 
     def reset_car_command(self):
-        self.net.reset_car()
+        rospy.wait_for_service('reset_car')
+        try:
+            reset_car_call = rospy.ServiceProxy('reset_car', reset_car)
+            pose = reset_car_call(0)
+            print pose
+        except rospy.ServiceException, e:
+            print "Service call failed: %s" % e
 
     def reset_weights_command(self):
         self.net.reset_weights()
@@ -887,136 +733,81 @@ class CockpitViewModel:
         self.net.learn = not self.net.learn
 
 
-class Cockpit(threading.Thread):
+class CockpitView(threading.Thread):
     def __init__(self, viewmodel):
         threading.Thread.__init__(self)
         self.viewmodel = viewmodel
         self.root = None
-        self.leftWeightsMeanLabel = None
-        self.rightWeightsMeanLabel = None
+        self.left_weights_mean_label = None
+        self.right_weights_mean_label = None
 
     def callback(self):
         self.root.quit()
 
     def update_weights_mean(self, weights_mean):
-        self.leftWeightsMeanLabel.labelText = "%.4f" % weights_mean[0]
-        self.rightWeightsMeanLabel.labelText = "%.4f" % weights_mean[1]
-
+        self.left_weights_mean_label.labelText = "%.4f" % weights_mean[0]
+        self.right_weights_mean_label.labelText = "%.4f" % weights_mean[1]
 
     def run(self):
         self.root = Tk.Tk()
         self.root.wm_title("Cockpit")
 
-        self.viewmodel.initializeViewModel()
+        self.viewmodel.initialize_view_model()
         self.root.protocol("WM_DELETE_WINDOW", self.callback)
 
         # Create GUI Elements
-        learnCheckbutton = Tk.Checkbutton(self.root, text="Learn", var=self.viewmodel.learn)
-        resetCar = Tk.Button(self.root, text = "Reset Car", command=self.viewmodel.reset_car_command)
-        constantWeightsTextBox = Tk.Text(self.root, height=1, width=20)
-        resetWeights = Tk.Button(self.root, text="Reset Weights", command=self.viewmodel.reset_weights_command)
+        learn_checkbutton = Tk.Checkbutton(self.root, text="Should Learn?", var=self.viewmodel.should_learn)
+        reset_car_button = Tk.Button(self.root, text = "Reset Car", command=self.viewmodel.reset_car_command)
+        constant_weights_text = Tk.Text(self.root, height=1, width=20)
+        reset_weights_button = Tk.Button(self.root, text="Reset Weights", command=self.viewmodel.reset_weights_command)
 
-        self.leftWeightsMeanLabel = Tk.Label(self.root, text="left", textvariable=self.viewmodel.weights_mean_left)
-        self.rightWeightsMeanLabel = Tk.Label(self.root, text="right", textvariable=self.viewmodel.weights_mean_right)
+        self.left_weights_mean_label = Tk.Label(self.root, text="left", textvariable=self.viewmodel.weights_mean_left)
+        self.right_weights_mean_label = Tk.Label(self.root, text="right", textvariable=self.viewmodel.weights_mean_right)
 
         # Arrange GUI Elements
-        learnCheckbutton.grid(row=0, column=0)
-        resetCar.grid(row=1, column=0)
-        resetWeights.grid(row=2, column=0)
-        # constantWeightsTextBox.grid(row=2, column=1)
-        self.leftWeightsMeanLabel.grid(row=3, column=0)
-        self.rightWeightsMeanLabel.grid(row=3, column=1)
-
+        learn_checkbutton.grid(row=0, column=0)
+        reset_car_button.grid(row=1, column=0)
+        reset_weights_button.grid(row=2, column=0)
+        # constant_weights_text.grid(row=2, column=1)
+        self.left_weights_mean_label.grid(row=3, column=0)
+        self.right_weights_mean_label.grid(row=3, column=1)
         self.root.mainloop()
-
-def _main(argv):
-    parser = create_argument_parser()
-    n = parser.parse_args()
-
-    node = SpikingNetworkNode()
-    w, h = node.last_frame.shape
-
-    network = BraitenbergNetwork(timestep=TIME_STEP, simduration=20, width=w, height=h)
-    world = World()
-    learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2, DISCOUNT_FACTOR,
-                                   LEARNING_RATE)
-    plotter = NetworkPlotter(network)
-
-    while True:
-        frame = node.last_frame
-        network.inject_frame(frame, node.lanelet_information)
-        network.simulate()
-        actions = network.decode_actions()
-
-        gas = actions['gas']
-        brake = actions['brake']
-        steering_angle = actions['steering_angle']
-
-        learner.learn()
-
-        plotter.update()
-
-        frame = frame.copy()
-        frame.T[50] = 255 - frame.T[50]
-        cv2.imshow('Cam', frame)
-        cv2.waitKey(1)
-
-        node.publish(gas, brake, steering_angle)
 
 
 def main(argv):
     parser = create_argument_parser()
     n = parser.parse_args()
 
-    node = SpikingNetworkNode()
-    w, h = node.last_frame.shape
+    world = World()
 
-    net = SpikingNetwork(w, h, n.plot)
+    network = BraitenbergNetwork(timestep=TIME_STEP, simduration=20, learner=None, should_learn=False)
+    learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2, DISCOUNT_FACTOR,
+                                   LEARNING_RATE)
+    network.learner = learner
 
-    window = cv2.namedWindow('Cam', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window, w * 4, h * 4)
+    if n.plot:
+        plotter = NetworkPlotter(network)
 
-    cockpit = CockpitViewModel(net)
-
-
-    if n.log:
-        compressed = False
-        maxbytes = 100 * 2**10
-        logger = create_weights_logger(compressed,maxbytes)
-        logperiod = 15 * 60 # log every 'logPeriod' seconds
-
-        starttime = time.time()
-        periodstarttime = starttime
+    cockpit = CockpitViewModel(network)
 
     while True:
-        if node.is_set_back:
-            net.spikes = np.zeros((NUM_RL_NEURONS, NUM_TRACE_STEPS), dtype='int32')
-            net.eligibility_trace = np.zeros((NUM_MIDDLE_LEARNING_LAYER,NUM_OUT_LEARNING_LAYER))
+        # Inject frame to network and start simulation
+        network.step()
 
-        if n.log:
-            now = time.time()
-            timepassed = now - starttime
-            timepassedperiod = now - periodstarttime
+        # Get actions chosen by the agent
+        actions = network.decode_actions()
 
-            if timepassedperiod >= logperiod:
-                log_weights(logger, timepassed, net.weights)
-                periodstarttime = time.time()
+        gas = actions['gas']
+        brake = actions['brake']
+        steering_angle = actions['steering_angle']
 
-        node.is_set_back = False
-        cv2.imshow('weights',cv2.resize(net.weights / 1000 ,(0,0), fx=100, fy=10,interpolation=cv2.INTER_NEAREST))
-        frame = node.last_frame
-        gas, brake, angle = net.inject(frame, node.lanelet_information)
-        frame2 = frame.copy()
-        frame2.T[50] = 255 - frame2.T[50]
-        cv2.imshow('Cam', frame2)
+        if n.plot:
+            plotter.update()
+
+        frame = network.last_frame.copy()
+        frame.T[50] = 255 - frame.T[50]
+        cv2.imshow('Cam', frame)
         cv2.waitKey(1)
-
-        node.publish(gas, brake, angle)
-
-        if net.learn:
-            net.update_weights(node.lanelet_information, angle)
-            #cockpit.update_weights_mean()
-
 
 if __name__ == '__main__':
     print "hello"
