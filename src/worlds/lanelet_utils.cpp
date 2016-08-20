@@ -61,7 +61,7 @@ std::string retrieveLaneletFilename(void)
 
       ROS_INFO_STREAM("Trying to retrieve lanelet filename ... ");
       laneletFilename = "";
-      bool result = ros::param::get("/AADC_AudiTT/lanelet_filename", laneletFilename);
+      bool result = ros::param::get("/lanelet_filename", laneletFilename);
       ROS_INFO_STREAM("ros::param::get() = " << result);
 
       if (!laneletFilename.empty()) {

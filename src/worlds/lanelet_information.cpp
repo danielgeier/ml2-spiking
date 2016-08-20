@@ -70,11 +70,12 @@ int main(int argc, char **argv)
 
   //Load Lanelet
   std::string fileName = retrieveLaneletFilename();
+  ROS_INFO_STREAM("Using Lanelet file " << fileName);
+
   LLet::LaneletMap llmap(fileName);
 
   while (ros::ok())
-  {
-    ROS_INFO_STREAM("Using Lanelet file " << fileName);
+  {   
     if (!init)
     {
       ros::spinOnce();

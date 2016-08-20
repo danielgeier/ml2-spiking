@@ -22,8 +22,8 @@ import time
 import datetime
 import logging.handlers as handlers
 import logging
-import threading
-import Tkinter as Tk
+import cockpit
+
 
 from std_msgs.msg import Bool, Float64MultiArray
 
@@ -58,7 +58,7 @@ class LaneletInformation:
 
     def __str__(self):
         s = """
-        Is on Lane: %s
+        Is on Right Lane: %s
         Is Left: %s
         Is Right: %s
         Distance: %.2f
@@ -470,8 +470,8 @@ class BraitenbergNetwork(BaseNetwork):
         return self._output_pop
 
     def reset_weights(self):
-        # weights = np.random.rand(2, 2) * 1000
-        weights = np.array([[0, 1],[1, 0]])*1000
+        weights = (np.random.rand(2, 2) - 0.5) * 1000
+        # weights = np.array([[0.5, 0.5],[0.5, 0.5]])*1000
         self.set_weights(weights)
 
     def get_weights(self):
@@ -558,9 +558,10 @@ class World(BaseWorld):
 
 
 class DeepNetwork(BaseNetwork):
-    def __init__(self, timestep, simduration, number_middle_layers, number_neurons_per_layer, num_out_learning=2):
+    def __init__(self, timestep, simduration, learner, number_middle_layers, number_neurons_per_layer,
+                 num_out_learning=2, should_learn=True):
         #copied Braitenberg
-        super(DeepNetwork, self).__init__(timestep, simduration)
+        super(DeepNetwork, self).__init__(timestep, simduration, learner, should_learn)
         self._output_pop = None
         self._middle_pop = None
         self._left_in_connection = None
@@ -616,8 +617,8 @@ class DeepNetwork(BaseNetwork):
 
     def reset_weights(self):
         vthresh_distr_1 = RandomDistribution('uniform', [0.1, 2])
-        self.self._left_out_connection.setWeights(vthresh_distr_1)
-        self.self._right_out_connection.setWeights(vthresh_distr_1)
+        self._left_out_connection.setWeights(vthresh_distr_1)
+        self._right_out_connection.setWeights(vthresh_distr_1)
 
 
 class NetworkPlotter:
@@ -690,88 +691,9 @@ def log_weights(logger, current_time, weights, formatstring='%.3f'):
     logger.info(s)
 
 
-class CockpitViewModel:
-    def __init__(self, net):
-        self.view = CockpitView(self)
-
-        # Traced variables
-        self.should_learn = None
-        self.weights_mean_left = None
-        self.weights_mean_right = None
-
-        # Important: Start view before initializing the variables
-        self.view.start()
-        self.net = net
-
-    def initialize_view_model(self):
-        self.should_learn = Tk.BooleanVar()
-        self.should_learn.set(self.net.should_learn)
-        self.weights_mean_left = Tk.StringVar()
-        self.weights_mean_right = Tk.StringVar()
-
-        self.should_learn.trace("w", self.learn_changed)
-
-    def update_weights_mean(self):
-        formatstring = "%.4f"
-        weights_mean = np.mean(self.net.weights, axis=0)
-        self.weights_mean_left.set(formatstring % weights_mean[0])
-        self.weights_mean_right.set(formatstring % weights_mean[1])
-
-    def reset_car_command(self):
-        rospy.wait_for_service('reset_car')
-        try:
-            reset_car_call = rospy.ServiceProxy('reset_car', reset_car)
-            pose = reset_car_call(0)
-            print pose
-        except rospy.ServiceException, e:
-            print "Service call failed: %s" % e
-
-    def reset_weights_command(self):
-        self.net.reset_weights()
-
-    def learn_changed(self, *args):
-        self.net.learn = not self.net.learn
-
-
-class CockpitView(threading.Thread):
-    def __init__(self, viewmodel):
-        threading.Thread.__init__(self)
-        self.viewmodel = viewmodel
-        self.root = None
-        self.left_weights_mean_label = None
-        self.right_weights_mean_label = None
-
-    def callback(self):
-        self.root.quit()
-
-    def update_weights_mean(self, weights_mean):
-        self.left_weights_mean_label.labelText = "%.4f" % weights_mean[0]
-        self.right_weights_mean_label.labelText = "%.4f" % weights_mean[1]
-
-    def run(self):
-        self.root = Tk.Tk()
-        self.root.wm_title("Cockpit")
-
-        self.viewmodel.initialize_view_model()
-        self.root.protocol("WM_DELETE_WINDOW", self.callback)
-
-        # Create GUI Elements
-        learn_checkbutton = Tk.Checkbutton(self.root, text="Should Learn?", var=self.viewmodel.should_learn)
-        reset_car_button = Tk.Button(self.root, text = "Reset Car", command=self.viewmodel.reset_car_command)
-        constant_weights_text = Tk.Text(self.root, height=1, width=20)
-        reset_weights_button = Tk.Button(self.root, text="Reset Weights", command=self.viewmodel.reset_weights_command)
-
-        self.left_weights_mean_label = Tk.Label(self.root, text="left", textvariable=self.viewmodel.weights_mean_left)
-        self.right_weights_mean_label = Tk.Label(self.root, text="right", textvariable=self.viewmodel.weights_mean_right)
-
-        # Arrange GUI Elements
-        learn_checkbutton.grid(row=0, column=0)
-        reset_car_button.grid(row=1, column=0)
-        reset_weights_button.grid(row=2, column=0)
-        # constant_weights_text.grid(row=2, column=1)
-        self.left_weights_mean_label.grid(row=3, column=0)
-        self.right_weights_mean_label.grid(row=3, column=1)
-        self.root.mainloop()
+class Configuration:
+    def __init__(self):
+        self.beta = 0
 
 
 def main(argv):
@@ -788,21 +710,16 @@ def main(argv):
     if n.plot:
         plotter = NetworkPlotter(network)
 
-    cockpit = CockpitViewModel(network)
+    cockpit_view = cockpit.CockpitViewModel(network)
 
     while True:
         # Inject frame to network and start simulation
         network.step()
 
-        # Get actions chosen by the agent
-        actions = network.decode_actions()
-
-        gas = actions['gas']
-        brake = actions['brake']
-        steering_angle = actions['steering_angle']
-
         if n.plot:
             plotter.update()
+
+        cockpit_view.update()
 
         frame = network.last_frame.copy()
         frame.T[50] = 255 - frame.T[50]
