@@ -213,6 +213,7 @@ class BaseNetwork:
         self._detectors = {}
         self._weights = None
 
+        self._last_action = 1
         self._learner = learner
         self._postsynaptic_learning_neurons = []
 
@@ -304,9 +305,11 @@ class BaseNetwork:
         self.projection_out_l.setWeights(1.0)
         self.projection_out_r.setWeights(1.0)
 
-        # bild mitte doppelt gewichtet
-        self.projection_out_l[2]._set_weight(2.0)
-        self.projection_out_r[3]._set_weight(2.0)
+        # bild seiten staerker gewichtet
+        self.projection_out_l[0]._set_weight(2.0)
+        self.projection_out_r[1]._set_weight(2.0)
+        self.projection_out_l[2]._set_weight(4.0)
+        self.projection_out_r[3]._set_weight(4.0)
 
     def _handle_frame(self, frame):
         self._last_frame = self._bridge.imgmsg_to_cv2(frame)
@@ -409,6 +412,7 @@ class BaseNetwork:
         brake = actions['brake']
         steering_angle = actions['steering_angle']
         self._car_update_publisher.publish(gas, brake, steering_angle)
+        self._last_action = gas ##
 
     def inject_frame(self, frame):
         frame_l = frame[0:50, 0:50]
@@ -471,7 +475,7 @@ class BraitenbergNetwork(BaseNetwork):
 
     def reset_weights(self):
         # weights = np.random.rand(2, 2) * 1000
-        weights = np.array([[0, 1],[1, 0]])*1000
+        weights = np.array([[1, 1],[1, 1]])*1000
         self.set_weights(weights)
 
     def get_weights(self):
@@ -495,7 +499,7 @@ class BraitenbergNetwork(BaseNetwork):
         num_spikes_r = spikes[1]
 
         num_spikes_diff = num_spikes_l - num_spikes_r
-        angle = num_spikes_diff / 10  # minus = rechts
+        angle = num_spikes_diff  # minus = rechts
         brake = 0
         gas = 1 / (abs(angle) + 2.5)
 
@@ -534,19 +538,21 @@ class World(BaseWorld):
         is_on_lanelet = state.is_on_lane
 
         # distance from the center of the right lane
-        distance = state.distance
-        if is_on_lanelet:
-            reward = (1 - distance)
-        else:
-            if (state.is_left and steering_angle < 0) or (state.is_right and steering_angle > 0):
-                reward = 0.1
-            else:
-                reward = -10. * (distance + 1) * (abs(steering_angle) + 1)
+        distance = state.distance * 2
+        reward = 1 - distance
 
-        if reward < -20:
-            reward = -20
+        # if is_on_lanelet:
+        #     reward = (1 - distance)
+        # else:
+        #     if (state.is_left and steering_angle < 0) or (state.is_right and steering_angle > 0):
+        #         reward = 0.1
+        #     else:
+        #         reward = -10. * (distance + 1) * (abs(steering_angle) + 1)
 
-        return reward*10
+        if reward < -5:
+            reward = -5
+
+        return reward
 
     @property
     def current_state(self):
@@ -558,9 +564,8 @@ class World(BaseWorld):
 
 
 class DeepNetwork(BaseNetwork):
-    def __init__(self, timestep, simduration, number_middle_layers, number_neurons_per_layer, num_out_learning=2):
-        #copied Braitenberg
-        super(DeepNetwork, self).__init__(timestep, simduration)
+    def __init__(self, timestep, simduration, learner, number_middle_layers, number_neurons_per_layer,  num_out_learning=2, should_learn=True):
+        super(DeepNetwork, self).__init__(timestep, simduration, learner, should_learn)
         self._output_pop = None
         self._middle_pop = None
         self._left_in_connection = None
@@ -730,7 +735,7 @@ class CockpitViewModel:
         self.net.reset_weights()
 
     def learn_changed(self, *args):
-        self.net.learn = not self.net.learn
+        self.net.should_learn = not self.net.should_learn
 
 
 class CockpitView(threading.Thread):
@@ -780,11 +785,11 @@ def main(argv):
 
     world = World()
 
-    network = BraitenbergNetwork(timestep=TIME_STEP, simduration=20, learner=None, should_learn=False)
+    network = BraitenbergNetwork(timestep=TIME_STEP, simduration=50, learner=None, should_learn=False)
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2, DISCOUNT_FACTOR,
                                    LEARNING_RATE)
     network.learner = learner
-
+    n.plot = True
     if n.plot:
         plotter = NetworkPlotter(network)
 
