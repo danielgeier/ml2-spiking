@@ -27,6 +27,7 @@ class CarControlNode:
         self.node_name = 'spiking_carcontrol'
         self.distance = None
         self.oldsec = time.time()
+        self.oldsec_reset_constantly = time.time()
         # Disable signals so PyCharm's rerun button works
         rospy.init_node(self.node_name, disable_signals=True)
         self.service = rospy.Service('reset_car', reset_car, self.handle_reset_car)
@@ -63,11 +64,20 @@ class CarControlNode:
             self.car_off_lane()
 
     def car_off_map(self, pose):
+        self.reset_constantly()
         if pose.position.z < RESPAWN_Z_THRESHOLD:
             self.reset_car_pose()
 
+    def reset_constantly(self):
+        if time.time()- self.oldsec_reset_constantly > 120:
+            self.reset_car_pose()
+            print '--------------------- 2 min ------------------'
+
+
     def car_off_lane(self):
-        if self.lanelet_information is None or self.lanelet_information.is_on_lane:
+        #if self.lanelet_information is None or self.lanelet_information.is_on_lane:
+        print self.distance
+        if self.distance < 0.5:
             self.oldsec = time.time()
 
         if self.reset:
@@ -76,10 +86,12 @@ class CarControlNode:
 
         newsec = time.time()
         print(self.reset, self.distance, self.oldsec, newsec)
-        if (newsec - self.oldsec) >= RESPAWN_AFTER:
+        if (newsec - self.oldsec) >= RESPAWN_AFTER or self.distance > 5:
             print newsec,'new',self.oldsec
 
             self.oldsec = time.time()
+            print '#######SET_BACK#####'
+            print self.distance
             self.reset_car_pose()
             self.reset = True
 
@@ -99,6 +111,8 @@ class CarControlNode:
         modelState.twist = Twist(Vector3(0,0,0),Vector3(0,0,0))
         self.pub_carModel.publish(modelState)
 
+        self.oldsec_reset_constantly = time.time()
+
         return res
 
     def reset_car_update(self):
@@ -112,7 +126,6 @@ class CarControlNode:
 
 if __name__ == '__main__':
     node = CarControlNode()
-
     while True:
         # Reset car on enter
         raw_input()

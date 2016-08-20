@@ -213,6 +213,7 @@ class BaseNetwork:
         self._detectors = {}
         self._weights = None
 
+        self._last_action = 1
         self._learner = learner
         self._postsynaptic_learning_neurons = []
 
@@ -304,9 +305,11 @@ class BaseNetwork:
         self.projection_out_l.setWeights(1.0)
         self.projection_out_r.setWeights(1.0)
 
-        # bild mitte doppelt gewichtet
-        self.projection_out_l[2]._set_weight(2.0)
-        self.projection_out_r[3]._set_weight(2.0)
+        # bild seiten staerker gewichtet
+        self.projection_out_l[0]._set_weight(2.0)
+        self.projection_out_r[1]._set_weight(2.0)
+        self.projection_out_l[2]._set_weight(4.0)
+        self.projection_out_r[3]._set_weight(4.0)
 
     def _handle_frame(self, frame):
         self._last_frame = self._bridge.imgmsg_to_cv2(frame)
@@ -409,6 +412,7 @@ class BaseNetwork:
         brake = actions['brake']
         steering_angle = actions['steering_angle']
         self._car_update_publisher.publish(gas, brake, steering_angle)
+        self._last_action = gas ##
 
     def inject_frame(self, frame):
         frame_l = frame[0:50, 0:50]
@@ -471,7 +475,7 @@ class BraitenbergNetwork(BaseNetwork):
 
     def reset_weights(self):
         weights = (np.random.rand(2, 2) - 0.5) * 1000
-        # weights = np.array([[0.5, 0.5],[0.5, 0.5]])*1000
+
         self.set_weights(weights)
 
     def get_weights(self):
@@ -495,7 +499,7 @@ class BraitenbergNetwork(BaseNetwork):
         num_spikes_r = spikes[1]
 
         num_spikes_diff = num_spikes_l - num_spikes_r
-        angle = num_spikes_diff / 10  # minus = rechts
+        angle = num_spikes_diff  # minus = rechts
         brake = 0
         gas = 1 / (abs(angle) + 2.5)
 
@@ -534,19 +538,21 @@ class World(BaseWorld):
         is_on_lanelet = state.is_on_lane
 
         # distance from the center of the right lane
-        distance = state.distance
-        if is_on_lanelet:
-            reward = (1 - distance)
-        else:
-            if (state.is_left and steering_angle < 0) or (state.is_right and steering_angle > 0):
-                reward = 0.1
-            else:
-                reward = -10. * (distance + 1) * (abs(steering_angle) + 1)
+        distance = state.distance * 2
+        reward = 1 - distance
 
-        if reward < -20:
-            reward = -20
+        # if is_on_lanelet:
+        #     reward = (1 - distance)
+        # else:
+        #     if (state.is_left and steering_angle < 0) or (state.is_right and steering_angle > 0):
+        #         reward = 0.1
+        #     else:
+        #         reward = -10. * (distance + 1) * (abs(steering_angle) + 1)
 
-        return reward*10
+        if reward < -5:
+            reward = -5
+
+        return reward
 
     @property
     def current_state(self):
@@ -690,11 +696,9 @@ def log_weights(logger, current_time, weights, formatstring='%.3f'):
     s = (formatstring % current_time) + "," + ",".join(map(lambda x: formatstring % x, weights.flatten()))
     logger.info(s)
 
-
 class Configuration:
     def __init__(self):
         self.beta = 0
-
 
 def main(argv):
     parser = create_argument_parser()
@@ -702,11 +706,11 @@ def main(argv):
 
     world = World()
 
-    network = BraitenbergNetwork(timestep=TIME_STEP, simduration=20, learner=None, should_learn=False)
+    network = BraitenbergNetwork(timestep=TIME_STEP, simduration=50, learner=None, should_learn=False)
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2, DISCOUNT_FACTOR,
                                    LEARNING_RATE)
     network.learner = learner
-
+    n.plot = True
     if n.plot:
         plotter = NetworkPlotter(network)
 
