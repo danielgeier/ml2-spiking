@@ -24,7 +24,9 @@ typedef struct side_information {
 LLet::point_with_id_t transformPointToGPS(geometry_msgs::Point point, LLet::point_with_id_t reference_point);
 geometry_msgs::Point transformGPSToPoint(LLet::point_with_id_t point, LLet::point_with_id_t reference_point);
 geometry_msgs::Point quaternionRotation(const geometry_msgs::Point& p, const geometry_msgs::Quaternion& q);
-double determineSide(const LLet::point_with_id_t& v, LLet::lanelet_ptr_t llnet);
+double determineSide(const LLet::point_with_id_t& v, LLet::lanelet_ptr_t llnet, double* angleVehicleLane = NULL);
+boost::tuple<double, double> normalize(boost::tuple<double, double> v);
+double length(boost::tuple<double, double> v);
 
 //Conversion
 geometry_msgs::Point geom_point(double x, double y, bool normalize = false);

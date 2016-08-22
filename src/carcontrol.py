@@ -41,7 +41,6 @@ class CarControlNode:
         self.lanelet_information = None
         self.reset = False
 
-
     def random_pose(self):
         rospy.wait_for_service('random_pos_service')
         try:
@@ -64,7 +63,7 @@ class CarControlNode:
             self.car_off_lane()
 
     def car_off_map(self, pose):
-        self.reset_constantly()
+        # self.reset_constantly()
         if pose.position.z < RESPAWN_Z_THRESHOLD:
             self.reset_car_pose()
 

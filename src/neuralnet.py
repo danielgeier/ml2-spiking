@@ -62,8 +62,8 @@ class LaneletInformation:
         Is Left: %s
         Is Right: %s
         Distance: %.2f
-        Angle of Vehicle to Lanelet (rad): %.2f
-        """ % (self.is_on_lane, self.is_left, self.is_right, self.distance, self.lanelet_angle)
+        Angle of Vehicle to Lanelet (deg): %.2f deg
+        """ % (self.is_on_lane, self.is_left, self.is_right, self.distance, self.lanelet_angle/np.pi * 180)
 
         return s
 
@@ -206,13 +206,14 @@ class BaseNetwork:
     """ Defines a basic network with an input layer """
     __metaclass__ = ABCMeta
 
-    def __init__(self, timestep, simduration, learner, should_learn=True):
+    def __init__(self, timestep, simduration, learner, should_learn=True, image_topic='/spiky/retina_image'):
 
         self._timestep = timestep
         self._simduration = simduration
         self._detectors = {}
         self._weights = None
-
+        self._output_pop = None
+        self._plastic_connections = None
         self._last_action = 1
         self._learner = learner
         self._postsynaptic_learning_neurons = []
@@ -235,7 +236,7 @@ class BaseNetwork:
         rospy.init_node('SNN', disable_signals=True)
         self._bridge = CvBridge()
         self._last_frame = None
-        self._retina_image_subscriber = rospy.Subscriber('/spiky/retina_image', Image, self._handle_frame, queue_size=1)
+        self._retina_image_subscriber = rospy.Subscriber(image_topic, Image, self._handle_frame, queue_size=1)
         rospy.wait_for_message('/spiky/retina_image', Image)
 
         if self._last_frame is not None:
@@ -246,6 +247,7 @@ class BaseNetwork:
         self._car_update_publisher = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
 
         self._build_input_layer()
+        self._build_output_layer()
         self._create_spike_detectors()
 
     def _build_input_layer(self):
@@ -311,6 +313,9 @@ class BaseNetwork:
         self.projection_out_l[2]._set_weight(4.0)
         self.projection_out_r[3]._set_weight(4.0)
 
+    def _build_output_layer(self):
+        self._output_pop = Population(2, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(2)})
+
     def _handle_frame(self, frame):
         self._last_frame = self._bridge.imgmsg_to_cv2(frame)
 
@@ -327,6 +332,11 @@ class BaseNetwork:
 
         self.detectors[self.pop_encoded_image_l[0]] = self.spikedetector_enc_image_l
         self.detectors[self.pop_encoded_image_r[0]] = self.spikedetector_enc_image_r
+
+        for neuron in self._output_pop:
+            detector = nest.nest.Create('spike_detector', params={'withgid': True, 'withtime': True})[0]
+            self.detectors[neuron] = detector
+            nest.nest.Connect(neuron, detector)
 
     @property
     def should_learn(self):
@@ -358,9 +368,9 @@ class BaseNetwork:
     def plotter(self):
         return self._plotter
 
-    @abstractproperty
+    @property
     def output_pop(self):
-        pass
+        return self._output_pop
 
     @property
     def timestep(self):
@@ -374,21 +384,40 @@ class BaseNetwork:
     def detectors(self):
         return self._detectors
 
-    @abstractmethod
+    @property
+    def plastic_connections(self):
+        if self._plastic_connections is None:
+            self._plastic_connections = nest.nest.GetConnections(target=self.postsynaptic_learning_neurons)
+        return self._plastic_connections
+
+
     def get_weights(self):
-        pass
+        connections = self.plastic_connections
+        return np.array(nest.nest.GetStatus(connections, 'weight'))
 
-    @abstractmethod
-    def set_weights(self, value):
-        pass
+    def set_weights(self, weights):
+        connections = self.plastic_connections
+        nest.nest.SetStatus(connections, [{'weight': w} for w in weights])
 
-    @abstractmethod
     def reset_weights(self):
-        pass
+        weights = np.random.uniform(-0.1, 1.0, len(self.plastic_connections)) * 5000
+        self.set_weights(weights)
 
-    @abstractmethod
     def decode_actions(self):
-        pass
+        spikes = np.array(nest.nest.GetStatus([self.detectors[x] for x in self.output_pop], 'n_events'))
+
+        # last two are output neurons
+        num_spikes_l = spikes[0]
+        num_spikes_r = spikes[1]
+
+        num_spikes_diff = np.power(num_spikes_l, 2) - np.power(num_spikes_r, 2)
+        angle = num_spikes_diff/ 10  # minus = rechts
+        brake = 0
+        #gas = 1.0 / (np.sqrt(abs(angle)) + 2.5)
+        gas = np.max(((1 - np.abs(angle))*0.5, 0.2))
+        actions = {'gas': gas, 'brake': brake, 'steering_angle': angle}
+
+        return actions
 
     @property
     def postsynaptic_learning_neurons(self):
@@ -430,80 +459,37 @@ class BaseNetwork:
 
 
 class BraitenbergNetwork(BaseNetwork):
-    def __init__(self, timestep, simduration, learner, should_learn=True):
-        super(BraitenbergNetwork, self).__init__(timestep, simduration, learner, should_learn)
+    def __init__(self, timestep, simduration, learner, should_learn=True, image_topic='/spiky/retina_image'):
+        super(BraitenbergNetwork, self).__init__(timestep, simduration, learner, should_learn, image_topic)
 
-        self._output_pop = None
         self._left_connection = None
         self._right_connection = None
 
         self._build_network()
 
     def _build_network(self):
-        self._output_pop = Population(2, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(2)})
+
         l = self.encoded_image_pops['left']
         r = self.encoded_image_pops['right']
 
-        self._left_connection = Projection(l, self._output_pop, AllToAllConnector())
-        self._right_connection = Projection(r, self._output_pop, AllToAllConnector())
-
-        # Detectors
-        spikedetector_left = nest.nest.Create('spike_detector', params={'withgid': True, 'withtime': True})[0]
-        spikedetector_right = nest.nest.Create('spike_detector', params={'withgid': True, 'withtime': True})[0]
-
-        nest.nest.Connect(self._output_pop[0], spikedetector_left)
-        nest.nest.Connect(self._output_pop[1], spikedetector_right)
-
-        self.detectors[self._output_pop[0]] = spikedetector_right
-        self.detectors[self._output_pop[1]] = spikedetector_left
+        self._left_connection = Projection(l, self.output_pop, AllToAllConnector())
+        self._right_connection = Projection(r, self.output_pop, AllToAllConnector())
 
         # Here go the neurons whose presynaptic connections are
         # adapted by a learner. In this case, we only want to adapt
         # the presynaptic connections of the output neurons.
-        for neuron in self._output_pop:
+        for neuron in self.output_pop:
             self.postsynaptic_learning_neurons.append(neuron)
 
         self.reset_weights()
 
     def populate_plotter(self, plotter):
         super(BraitenbergNetwork, self).populate_plotter(plotter)
-        plotter.add_spike_train_plot(self._output_pop, 'Output L/R')
-
-    @property
-    def output_pop(self):
-        return self._output_pop
+        plotter.add_spike_train_plot(self.output_pop, 'Output R/L')
 
     def reset_weights(self):
-        weights = (np.random.rand(2, 2) - 0.5) * 1000
-
+        weights = np.array([1.0, -0.3, -0.3, 1.0])*3000
         self.set_weights(weights)
-
-    def get_weights(self):
-        target_left = nest.nest.GetConnections(target=[self._output_pop[0]])
-        target_right = nest.nest.GetConnections(target=[self._output_pop[1]])
-
-        weights_l = nest.nest.GetStatus(target_left, 'weight')
-        weights_r = nest.nest.GetStatus(target_right, 'weight')
-
-        return np.vstack((weights_l, weights_r))
-
-    def set_weights(self, weights):
-        self._left_connection.setWeights(weights[:, 0]/1000)
-        self._right_connection.setWeights(weights[:, 1]/1000)
-
-    def decode_actions(self):
-        spikes = np.array(nest.nest.GetStatus([self.detectors[x] for x in self._output_pop], 'n_events'))
-
-        # last two are output neurons
-        num_spikes_l = spikes[0]
-        num_spikes_r = spikes[1]
-
-        num_spikes_diff = num_spikes_l - num_spikes_r
-        angle = num_spikes_diff  # minus = rechts
-        brake = 0
-        gas = 1 / (abs(angle) + 2.5)
-
-        return {'gas': gas, 'brake': brake, 'steering_angle': angle}
 
 
 class BaseWorld:
@@ -549,10 +535,10 @@ class World(BaseWorld):
         #     else:
         #         reward = -10. * (distance + 1) * (abs(steering_angle) + 1)
 
-        if reward < -5:
-            reward = -5
+        if reward < -1:
+            reward = -1
 
-        return reward
+        return reward * 3
 
     @property
     def current_state(self):
@@ -565,66 +551,64 @@ class World(BaseWorld):
 
 class DeepNetwork(BaseNetwork):
     def __init__(self, timestep, simduration, learner, number_middle_layers, number_neurons_per_layer,
-                 num_out_learning=2, should_learn=True):
-        #copied Braitenberg
-        super(DeepNetwork, self).__init__(timestep, simduration, learner, should_learn)
-        self._output_pop = None
-        self._middle_pop = None
-        self._left_in_connection = None
-        self._right_in_connection = None
-        self._middle_connection = None
-        self._left_out_connection = None
-        self._right_out_connection = None
-        self._postsynaptic_learning_neurons = []
+                 should_learn=True, image_topic='/spiky/retina_image'):
+        super(DeepNetwork, self).__init__(timestep, simduration, learner, should_learn, image_topic)
+
+        self._middle_pops = []
+
         self._number_neurons_per_layer = number_neurons_per_layer
-        self._num_out_learning = num_out_learning
-        self.number_middle_layers = number_middle_layers
+        self._num_out_learning = len(self.output_pop)
+        self._number_middle_layers = number_middle_layers
+
         self._build_network()
 
     def _build_network(self):
-        self._output_pop = Population(self._num_out_learning, IF_curr_alpha,
-                                    {'tau_refrac': 0.1, 'i_offset': np.zeros(self._number_neurons_per_layer)})
         l = self.encoded_image_pops['left']
         r = self.encoded_image_pops['right']
-        # Appends versatile number of middle layers
-        for i in range(self.number_middle_layers):
-            self._middle_pop[i] = Population(self._number_neurons_per_layer, IF_curr_alpha,
-                                          {'tau_refrac': 0.1, 'i_offset': np.zeros(self._num_out_learning)})
+
+        # Appends variable number of middle layers
+        for i in range(self._number_middle_layers):
+            current_pop = Population(self._number_neurons_per_layer, IF_curr_alpha,
+                                             {'tau_refrac': 0.1, 'i_offset': np.zeros(self._number_neurons_per_layer)})
+            self._middle_pops.append(current_pop)
             if i == 0:
                 # Connect input layer to first middle layer
-                self._left_in_connection = Projection(l, self._middle_pop[i], AllToAllConnector())
-                self._right_in_connection = Projection(r, self._middle_pop[i], AllToAllConnector())
+                left_in_connection = Projection(l, self._middle_pops[i], AllToAllConnector())
+                right_in_connection = Projection(r, self._middle_pops[i], AllToAllConnector())
             else:
                 # Connect latest middle layer to current
-                self._middle_connection[i] = Projection(self._middle_pop[i-1], self._middle_pop[i], AllToAllConnector())
+                connection = Projection(self._middle_pops[i - 1], self._middle_pops[i], AllToAllConnector())
 
-            for j in range(self._number_neurons_per_layer):
-                detector = nest.nest.Create('spike_detector')[0]
-                self.detectors[self._middle_pop[i][j]] = detector
-                nest.nest.Connect(self._middle_pop[i][j], detector)
+            for neuron in current_pop:
+                detector = nest.nest.Create('spike_detector', params={'withgid': True, 'withtime': True})[0]
+                self.detectors[neuron] = detector
+                nest.nest.Connect(neuron, detector)
 
-        #Connect last middle layer to output
-        self._left_out_connection = Projection(self._middle_pop[self.number_middle_layers-1], self._output_pop, AllToAllConnector())
-        self._right_out_connection = Projection(self._middle_pop[self.number_middle_layers-1], self._output_pop, AllToAllConnector())
-        self.spikedetector_deep_out = np.ndarray(2, dtype='int32')
+        # Connect last middle layer to output
+        left_out_connection = Projection(self._middle_pops[self._number_middle_layers - 1], self.output_pop,
+                                         AllToAllConnector())
+        right_out_connection = Projection(self._middle_pops[self._number_middle_layers - 1], self.output_pop,
+                                          AllToAllConnector())
 
-        for neuron in self._output_pop:
-            self.detectors[neuron] = nest.nest.Create('spike_detector')[0]
-            nest.nest.Connect(neuron, self.spikedetector_deep_out[i])
-
-        #  Here go the neurons whose presynaptic connections are
+        # Here go the neurons whose presynaptic connections are
         # adapted by a learner. In this case, we only want to adapt
         # the presynaptic connections of the output neurons.
-        for pop in self._middle_pop:
+        for pop in self._middle_pops:
             for neuron in pop:
-                self._postsynaptic_learning_neurons.append(neuron)
+                self.postsynaptic_learning_neurons.append(neuron)
+
+        for neuron in self.output_pop:
+            self.postsynaptic_learning_neurons.append(neuron)
 
         self.reset_weights()
 
-    def reset_weights(self):
-        vthresh_distr_1 = RandomDistribution('uniform', [0.1, 2])
-        self._left_out_connection.setWeights(vthresh_distr_1)
-        self._right_out_connection.setWeights(vthresh_distr_1)
+    def populate_plotter(self, plotter):
+        super(DeepNetwork, self).populate_plotter(plotter)
+        plotter.add_spike_train_plot(self.output_pop, 'Output R/L')
+        i = 0
+        for pop in self._middle_pops:
+            plotter.add_spike_train_plot(pop, 'Middle Pop %d' % i)
+            i += 1
 
 
 class NetworkPlotter:
@@ -643,13 +627,13 @@ class SizedTimedRotatingFileHandler(handlers.TimedRotatingFileHandler):
     to the next when the current file reaches a certain size, or at certain
     timed intervals
     """
-    def __init__(self, filename, mode='a', maxBytes=0, backupCount=0, encoding=None,
+    def __init__(self, filename, mode='a', max_bytes=0, backup_count=0, encoding=None,
                  delay=0, when='h', interval=1, utc=False):
-        if maxBytes > 0:
+        if max_bytes > 0:
             self.mode = 'a'
         handlers.TimedRotatingFileHandler.__init__(
-            self, filename, when, interval, backupCount, encoding, delay, utc)
-        self.maxBytes = maxBytes
+            self, filename, when, interval, backup_count, encoding, delay, utc)
+        self.maxBytes = max_bytes
 
     def shouldRollover(self, record):
         if self.stream is None:                 # delay was set...
@@ -665,6 +649,50 @@ class SizedTimedRotatingFileHandler(handlers.TimedRotatingFileHandler):
         return 0
 
 
+class NetworkLogger:
+    def __init__(self, network, formatstring='%.3f', log_period=900, maxbytes=104857600, compressed=False, when='D',
+                 interval=10, backup_count=5):
+        self._network = network
+
+        timestamp = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
+        dumpdir = os.path.join(WEIGHTS_DUMPS_DIR, timestamp)
+        os.mkdir(dumpdir)
+
+        ext = 'bz2' if compressed else 'txt'
+        filename = os.path.join(dumpdir, 'weights.' + ext)
+
+        self._logger = logging.getLogger('WeightsLogger')
+        self._logger.setLevel(logging.INFO)
+
+        encoding = 'bz2' if compressed else None
+        handler = SizedTimedRotatingFileHandler(filename, max_bytes=maxbytes, backup_count=backup_count, when=when,
+                                                interval=interval, encoding=encoding)
+
+        self._logger.addHandler(handler)
+
+        self._starttime = time.time()
+        self._period_starttime = self._starttime
+        self._formatstring = formatstring
+        self._log_period = log_period
+
+    def log_weights(self):
+        now = time.time()
+
+        if now - self._period_starttime > self._log_period:
+            current_time = now - self._starttime
+            weights = self._network.get_weights()
+            s = (self._formatstring % current_time) + "," \
+                + ",".join(map(lambda x: self._formatstring % x, weights.flatten()))
+
+            self._logger.info(s)
+            self._period_starttime = now
+
+
+class Configuration:
+    def __init__(self):
+        self.beta = 0
+
+
 def create_argument_parser():
     parser = argparse.ArgumentParser(description='Spiking Neural Network Node')
     parser.add_argument('-p', '--plot', action='store_true')
@@ -672,47 +700,26 @@ def create_argument_parser():
     return parser
 
 
-def create_weights_logger(compressed = False, maxbytes=104857600):  # maxbytes default: 100 MB
-    # Create timestamp for folder name in
-    timestamp = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
-    dumpdir = os.path.join(WEIGHTS_DUMPS_DIR, timestamp)
-    os.mkdir(dumpdir)
-
-    ext = 'bz2' if compressed else 'txt'
-    filename = os.path.join(dumpdir, 'weights.' + ext)
-
-    logger = logging.getLogger('WeightsLogger')
-    logger.setLevel(logging.INFO)
-    encoding = 'bz2' if compressed else None
-    handler = SizedTimedRotatingFileHandler(filename, maxBytes=maxbytes, backupCount=5, when='D', interval=10, encoding=encoding)
-
-    logger.addHandler(handler)
-
-    return logger
-
-
-def log_weights(logger, current_time, weights, formatstring='%.3f'):
-    # time, w1, w2, ...
-    s = (formatstring % current_time) + "," + ",".join(map(lambda x: formatstring % x, weights.flatten()))
-    logger.info(s)
-
-class Configuration:
-    def __init__(self):
-        self.beta = 0
-
 def main(argv):
     parser = create_argument_parser()
     n = parser.parse_args()
 
     world = World()
 
-    network = BraitenbergNetwork(timestep=TIME_STEP, simduration=50, learner=None, should_learn=False)
+    network = BraitenbergNetwork(timestep=TIME_STEP, simduration=20, learner=None, should_learn=False)
+    #network = DeepNetwork(timestep=TIME_STEP, simduration=10, learner=None, should_learn=False,
+    #                           number_middle_layers=2, number_neurons_per_layer=10)
+
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2, DISCOUNT_FACTOR,
                                    LEARNING_RATE)
     network.learner = learner
-    n.plot = True
+
     if n.plot:
-        plotter = NetworkPlotter(network)
+        plotter = NetworkPlotter(network, plot_steps=20)
+
+    n.log = True
+    if n.log:
+        logger = NetworkLogger(network, log_period=10)
 
     cockpit_view = cockpit.CockpitViewModel(network)
 
@@ -722,6 +729,9 @@ def main(argv):
 
         if n.plot:
             plotter.update()
+
+        if n.log:
+            logger.log_weights()
 
         cockpit_view.update()
 

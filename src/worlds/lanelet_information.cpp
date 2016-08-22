@@ -106,7 +106,7 @@ int main(int argc, char **argv)
       //Lanelet heading output
       double laneletHeading = 0;
       LLet::lanelet_ptr_t llnet;
-      llmap.map_matching(current_location, llnet, MAX_DISTANCE, &laneletHeading, true, vehicleHeadingAngle, M_PI/8);
+      llmap.map_matching(current_location, llnet, MAX_DISTANCE, &laneletHeading, true, vehicleHeadingAngle, M_PI/3);
 
       if (llnet != NULL)
       {
@@ -115,8 +115,9 @@ int main(int argc, char **argv)
         double distance = llnet->distance_to(current_location);
 
         LLet::strip_ptr_t centerLineStrip = boost::get<LLet::SIDE::CENTER>(llnet->bounds());
+        double angleVehicleLane = 0.0;
         double signedDistance = centerLineStrip->signed_distance(current_location);
-        double side = determineSide(current_location,llnet);
+        double side = determineSide(current_location,llnet, &angleVehicleLane);
         double mySignedDistance = side * distance_center_line;
 
         //Check the nearest lanelet to determine whether the car is on the lane or not
@@ -129,7 +130,7 @@ int main(int argc, char **argv)
         //Fill Message Array
         laneletInformationMessage.data.push_back(distance);
         laneletInformationMessage.data.push_back(isCovered);
-        laneletInformationMessage.data.push_back(laneletHeading);
+        laneletInformationMessage.data.push_back(angleVehicleLane);
         laneletInformationMessage.data.push_back(isLeft);
 
         //Output
@@ -138,7 +139,7 @@ int main(int argc, char **argv)
         ROS_INFO_STREAM("LANELET COVERS CURRENT LOCATION " << isCovered);
         ROS_INFO_STREAM("HEADING ANGLE (atan2(y,x)): " << vehicleHeadingAngle);
         ROS_INFO_STREAM("HEADING ANGLE (degree): " << vehicleHeadingAngle/M_PI * 180.0);
-        ROS_INFO_STREAM("LANELET HEADING: " << laneletHeading);
+        ROS_INFO_STREAM("ANGLE(VEHICLE, LANE): " << angleVehicleLane);
         ROS_INFO_STREAM("ROTATION: (" << vehicleHeading.x << ", " << vehicleHeading.y << ", " << vehicleHeading.z << ")");
 
         ROS_INFO_STREAM(":::LineStrip:::");        

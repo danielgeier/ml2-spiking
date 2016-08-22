@@ -72,7 +72,7 @@ std::string retrieveLaneletFilename(void)
     return laneletFilename;
 }
 
-double determineSide(const LLet::point_with_id_t& p, LLet::lanelet_ptr_t llnet) {
+double determineSide(const LLet::point_with_id_t& p, LLet::lanelet_ptr_t llnet, double* angleVehicleLane) {
     std::size_t idx = 0;
     std::size_t prevIdx = 0;
     std::size_t nextIdx = 0;
@@ -99,6 +99,11 @@ double determineSide(const LLet::point_with_id_t& p, LLet::lanelet_ptr_t llnet) 
     double det = boost::get<0>(l)*boost::get<1>(v) - boost::get<1>(l)*boost::get<0>(v);
     double s = det < 0? -1 : (det == 0? 0 : 1); //-1 = left, 0=center, 1=right
 
+    if (angleVehicleLane != NULL)
+    {
+        *angleVehicleLane = std::asin(det/(length(v)*length(l)))*s;
+    }
+
     return s;
 }
 
@@ -118,4 +123,15 @@ geometry_msgs::Point geom_point(double x, double y, bool normalize) {
     }
 
     return gp;
+}
+
+boost::tuple<double, double> normalize(boost::tuple<double, double> v) {
+    double l = length(v);
+    boost::tuple<double, double> n = boost::make_tuple(boost::get<0>(v)/l, boost::get<1>(v)/l);
+
+    return n;
+}
+
+double length(boost::tuple<double, double> v) {
+    return std::sqrt(boost::get<0>(v)*boost::get<0>(v) + boost::get<1>(v)*boost::get<1>(v));
 }
