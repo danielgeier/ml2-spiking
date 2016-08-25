@@ -41,6 +41,9 @@ class CarControlNode:
         self.lanelet_information = None
         self.reset = False
 
+        self._last_reset_pos = None
+        self._use_last = False
+
     def random_pose(self):
         rospy.wait_for_service('random_pos_service')
         try:
@@ -96,7 +99,13 @@ class CarControlNode:
 
     def reset_car_pose(self):
         print 'isch runnergfalle oder zu lang wegg'
-        res = self.random_pose()
+
+        if self._use_last and self._last_reset_pos is not None:
+            res = self._last_reset_pos
+        else:
+            res = self.random_pose()
+            self._last_reset_pos = res
+
         pose = res['pose']
 
         #change in Starting_pose when using one- or nocrossing
@@ -119,6 +128,8 @@ class CarControlNode:
         self.pub_carUpdate.publish(STARTING_ARGS)
 
     def handle_reset_car(self, req):
+        self._use_last = req.mode == 1
+        print 'Mode: ', self._use_last
         res = self.reset_car_pose()
         return reset_carResponse(res['list'])
 

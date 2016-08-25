@@ -506,6 +506,10 @@ class BaseWorld:
     def current_state(self):
         pass
 
+    @abstractproperty
+    def last_reward(self):
+        pass
+
 
 class World(BaseWorld):
     def __init__(self,topic='/laneletInformation'):
@@ -513,6 +517,9 @@ class World(BaseWorld):
         self.sub_lanelet = rospy.Subscriber(topic, Float64MultiArray, self._update_state,
                                             queue_size=1)
         self._state = None
+        self._last_reward = None
+        self._last_distance = None
+        self._last_angle_vehicle_lane = None
 
     def calculate_reward(self, actions):
         state = self._state
@@ -522,10 +529,18 @@ class World(BaseWorld):
 
         steering_angle = actions['steering_angle']
         is_on_lanelet = state.is_on_lane
+        angle_vehicle_lane = state.lanelet_angle
 
         # distance from the center of the right lane
         distance = state.distance * 2
-        reward = 1 - distance
+        distance_reward = 1 - distance
+
+        # angle_vehicle_lane_reward = np.pi/2 - np.abs(angle_vehicle_lane)
+
+        if self._last_angle_vehicle_lane is not None:
+            angle_vehicle_lane_reward = np.abs(self._last_angle_vehicle_lane) - np.abs(angle_vehicle_lane)
+        else:
+            angle_vehicle_lane_reward = 0
 
         # if is_on_lanelet:
         #     reward = (1 - distance)
@@ -535,14 +550,24 @@ class World(BaseWorld):
         #     else:
         #         reward = -10. * (distance + 1) * (abs(steering_angle) + 1)
 
+        reward = distance_reward + 0.5 * angle_vehicle_lane_reward
+
         if reward < -1:
             reward = -1
 
-        return reward * 3
+        self._last_reward = reward * 3
+        self._last_angle_vehicle_lane = angle_vehicle_lane
+        self._last_distance = distance
+
+        return self._last_reward
 
     @property
     def current_state(self):
         return self._state
+
+    @property
+    def last_reward(self):
+        return self._last_reward
 
     def _update_state(self, state):
         if len(state.data) > 0:
@@ -602,6 +627,10 @@ class DeepNetwork(BaseNetwork):
 
         self.reset_weights()
 
+    def reset_weights(self):
+        weights = np.random.uniform(-1.5,2,len(self.plastic_connections))*2500
+        self.set_weights(weights)
+
     def populate_plotter(self, plotter):
         super(DeepNetwork, self).populate_plotter(plotter)
         plotter.add_spike_train_plot(self.output_pop, 'Output R/L')
@@ -656,36 +685,61 @@ class NetworkLogger:
 
         timestamp = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
         dumpdir = os.path.join(WEIGHTS_DUMPS_DIR, timestamp)
-        os.mkdir(dumpdir)
+        if not os.path.isdir(dumpdir):
+            if not os.path.isdir(DUMPS_DIR):
+                os.mkdir(DUMPS_DIR)
+                os.mkdir(WEIGHTS_DUMPS_DIR)
+
+            os.mkdir(dumpdir)
 
         ext = 'bz2' if compressed else 'txt'
-        filename = os.path.join(dumpdir, 'weights.' + ext)
+        weights_filename = os.path.join(dumpdir, 'weights.' + ext)
+        reward_filename = os.path.join(dumpdir, 'reward.' + ext)
 
-        self._logger = logging.getLogger('WeightsLogger')
-        self._logger.setLevel(logging.INFO)
+        self._reward_logger = logging.getLogger("RewardLogger")
+        self._reward_logger.setLevel(logging.INFO)
+
+        self._weights_logger = logging.getLogger('WeightsLogger')
+        self._weights_logger.setLevel(logging.INFO)
 
         encoding = 'bz2' if compressed else None
-        handler = SizedTimedRotatingFileHandler(filename, max_bytes=maxbytes, backup_count=backup_count, when=when,
+        weights_handler = SizedTimedRotatingFileHandler(weights_filename, max_bytes=maxbytes, backup_count=backup_count, when=when,
                                                 interval=interval, encoding=encoding)
 
-        self._logger.addHandler(handler)
+        self._weights_logger.addHandler(weights_handler)
 
+        reward_handler = SizedTimedRotatingFileHandler(reward_filename, max_bytes=maxbytes, backup_count=backup_count, when=when,
+                                                interval=interval, encoding=encoding)
+        self._reward_logger.addHandler(reward_handler)
+        self._reward = []
         self._starttime = time.time()
         self._period_starttime = self._starttime
         self._formatstring = formatstring
         self._log_period = log_period
 
-    def log_weights(self):
+    def log(self):
         now = time.time()
+        actions = self._network.decode_actions()
+        self._reward.append(self._network.learner.world.calculate_reward(actions))
 
         if now - self._period_starttime > self._log_period:
+            self.log_weights(now)
+            self.log_reward(now)
+            self._period_starttime = now
+
+    def log_reward(self, now):
+        mean_reward = np.mean(np.array(self._reward))
+        self._reward = []
+
+        self._reward_logger.info('%f, %f' % (now, mean_reward))
+
+    def log_weights(self, now):
             current_time = now - self._starttime
             weights = self._network.get_weights()
+
             s = (self._formatstring % current_time) + "," \
                 + ",".join(map(lambda x: self._formatstring % x, weights.flatten()))
-
-            self._logger.info(s)
-            self._period_starttime = now
+            self._weights_logger.info(s)
 
 
 class Configuration:
@@ -706,14 +760,14 @@ def main(argv):
 
     world = World()
 
-    network = BraitenbergNetwork(timestep=TIME_STEP, simduration=20, learner=None, should_learn=False)
-    #network = DeepNetwork(timestep=TIME_STEP, simduration=10, learner=None, should_learn=False,
-    #                           number_middle_layers=2, number_neurons_per_layer=10)
+    #network = BraitenbergNetwork(timestep=TIME_STEP, simduration=20, learner=None, should_learn=False)
+    network = DeepNetwork(timestep=TIME_STEP, simduration=10, learner=None, should_learn=False,
+                              number_middle_layers=2, number_neurons_per_layer=10)
 
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2, DISCOUNT_FACTOR,
                                    LEARNING_RATE)
     network.learner = learner
-
+    n.plot = True
     if n.plot:
         plotter = NetworkPlotter(network, plot_steps=20)
 
@@ -731,7 +785,7 @@ def main(argv):
             plotter.update()
 
         if n.log:
-            logger.log_weights()
+            logger.log()
 
         cockpit_view.update()
 

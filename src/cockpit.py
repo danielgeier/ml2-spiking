@@ -82,6 +82,7 @@ class CockpitViewModel:
         self.should_learn = None
         self.weights_mean_left = None
         self.weights_mean_right = None
+        self.use_last = None
 
         # Important: Start view before initializing the variables
         self.view.start()
@@ -92,6 +93,7 @@ class CockpitViewModel:
         self.should_learn.set(self.net.should_learn)
         self.weights_mean_left = Tk.StringVar()
         self.weights_mean_right = Tk.StringVar()
+        self.use_last = Tk.BooleanVar()
 
         self.should_learn.trace("w", self.learn_changed)
 
@@ -106,7 +108,9 @@ class CockpitViewModel:
         rospy.wait_for_service('reset_car')
         try:
             reset_car_call = rospy.ServiceProxy('reset_car', reset_car)
-            pose = reset_car_call(0)
+            mode = 1 if self.use_last.get() else 0
+            print "Mode: ", mode
+            pose = reset_car_call(mode)
             print pose
         except rospy.ServiceException, e:
             print "Service call failed: %s" % e
@@ -125,6 +129,7 @@ class CockpitView(threading.Thread):
         self.root = None
         self.left_weights_mean_label = None
         self.right_weights_mean_label = None
+        self.use_last_checkbutton = None
         self.camera_label = None
         self.weights_image_label = None
 
@@ -228,6 +233,7 @@ class CockpitView(threading.Thread):
 
         # Create GUI Elements
         learn_checkbutton = Tk.Checkbutton(self.root, text="Should Learn?", var=self.viewmodel.should_learn)
+        self.use_last_checkbutton = Tk.Checkbutton(self.root, text="Use Last Reset Point?", var=self.viewmodel.use_last)
         reset_car_button = Tk.Button(self.root, text="Reset Car", command=self.viewmodel.reset_car_command)
         constant_weights_text = Tk.Text(self.root, height=1, width=20)
         reset_weights_button = Tk.Button(self.root, text="Reset Weights", command=self.viewmodel.reset_weights_command)
@@ -270,14 +276,15 @@ class CockpitView(threading.Thread):
         # Arrange GUI Elements
         learn_checkbutton.grid(row=0, column=0)
         reset_car_button.grid(row=1, column=0)
-        reset_weights_button.grid(row=2, column=0)
+        self.use_last_checkbutton.grid(row=2, column=0)
+        reset_weights_button.grid(row=3, column=0)
         # constant_weights_text.grid(row=2, column=1)
-        self.left_weights_mean_label.grid(row=3, column=0)
-        self.right_weights_mean_label.grid(row=3, column=1)
-        self.camera_label.grid(row=4,column=0)
-        self.weights_image_label.grid(row=5, column=0)
+        self.left_weights_mean_label.grid(row=4, column=0)
+        self.right_weights_mean_label.grid(row=4, column=1)
+        self.camera_label.grid(row=5,column=0)
+        self.weights_image_label.grid(row=6, column=0)
         #discount_factor_scale.grid(row=6, column=1)
-        self.plot_canvas.get_tk_widget().grid(row=0, column=1, rowspan=6, sticky='nswe', columnspan=2)
+        self.plot_canvas.get_tk_widget().grid(row=0, column=1, rowspan=7, sticky='nswe', columnspan=2)
 
         self.root.mainloop()
 
