@@ -50,7 +50,7 @@ SIGMA = 0.001
 class LaneletInformation:
     def __init__(self, data):
         self.distance = data[0]
-        self.lanelet_angle = data[2]
+        self.angle_vehicle_lane = data[2]
 
         self.is_on_lane = bool(data[1])
         self.is_left = bool(data[3])
@@ -63,7 +63,7 @@ class LaneletInformation:
         Is Right: %s
         Distance: %.2f
         Angle of Vehicle to Lanelet (deg): %.2f deg
-        """ % (self.is_on_lane, self.is_left, self.is_right, self.distance, self.lanelet_angle/np.pi * 180)
+        """ % (self.is_on_lane, self.is_left, self.is_right, self.distance, self.angle_vehicle_lane/np.pi * 180)
 
         return s
 
@@ -529,7 +529,7 @@ class World(BaseWorld):
 
         steering_angle = actions['steering_angle']
         is_on_lanelet = state.is_on_lane
-        angle_vehicle_lane = state.lanelet_angle
+        angle_vehicle_lane = state.angle_vehicle_lane
 
         # distance from the center of the right lane
         distance = state.distance * 2
@@ -629,7 +629,32 @@ class DeepNetwork(BaseNetwork):
 
     def reset_weights(self):
         weights = np.random.uniform(-1.5,2,len(self.plastic_connections))*2500
-        self.set_weights(weights)
+        weights_inout = np.zeros(((NUM_OUT_LEARNING_LAYER+NUM_IN_LEARNING_LAYER)*self._number_neurons_per_layer), dtype=Float64MultiArray)
+        counter = 0
+        for i in range(NUM_OUT_LEARNING_LAYER+NUM_IN_LEARNING_LAYER):
+            temp_weights = (np.random.dirichlet(np.ones(self._number_neurons_per_layer),size=1))*100
+            temp_weights_avg = np.average(temp_weights)
+            temp_weights[:] = [x - temp_weights_avg for x in temp_weights]
+            temp_weights *= 250
+            for j in range(len(temp_weights[0])):
+                weights_inout[counter] = temp_weights[0][j]
+                counter +=1
+
+
+        self.set_weights(weights, weights_inout)
+
+    def set_weights(self, weights, weights_inout):
+        num_connections_in = NUM_IN_LEARNING_LAYER * self._number_neurons_per_layer
+        num_connections_out = NUM_OUT_LEARNING_LAYER * self._number_neurons_per_layer
+        connections = self.plastic_connections
+        connections_inout = []
+        for con in self.plastic_connections[:num_connections_in]:
+            connections_inout.append(con)
+        for con in self.plastic_connections[-num_connections_out:]:
+            connections_inout.append(con)
+
+        nest.nest.SetStatus(connections, [{'weight': w} for w in weights])
+        nest.nest.SetStatus(connections_inout, [{'weight': w} for w in weights_inout])
 
     def populate_plotter(self, plotter):
         super(DeepNetwork, self).populate_plotter(plotter)

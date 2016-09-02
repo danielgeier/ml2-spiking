@@ -26,6 +26,10 @@ class MockState:
     def distance(self):
         return np.random.rand(1)
 
+    @property
+    def angle_vehicle_lane(self):
+        return np.random.rand(1)
+
 class MockWorld:
     def calculate_reward(self, actions):
         return np.random.rand(1)
@@ -142,11 +146,13 @@ class CockpitView(threading.Thread):
         self.reward_ax = None
         self.distance_ax = None
         self.speed_ax = None
+        self.angle_vehicle_lane_ax = None
 
         self.steerin_angle_points = None
         self.reward_points = None
         self.distance_points = None
         self.speed_points = None
+        self.angle_vehicle_lane_points = None
 
         # Step counter for plot
         self.plot_step = 0
@@ -157,6 +163,7 @@ class CockpitView(threading.Thread):
         self.reward_data_window = np.zeros(self.window_size)
         self.distance_data_window = np.zeros(self.window_size)
         self.speed_data_window = np.zeros(self.window_size)
+        self.angle_vehicle_lane_data_window = np.zeros(self.window_size)
 
     def callback(self):
         self.root.quit()
@@ -218,7 +225,12 @@ class CockpitView(threading.Thread):
         self.distance_data_window = np.roll(self.distance_data_window, -1)
         self.distance_points.set_data(x, self.distance_data_window)
         self.distance_ax.set_ylim(np.min(self.distance_data_window), np.max(self.distance_data_window))
-        
+
+        self.angle_vehicle_lane_data_window[0] = state.angle_vehicle_lane
+        self.angle_vehicle_lane_data_window = np.roll(self.angle_vehicle_lane_data_window, -1)
+        self.angle_vehicle_lane_points.set_data(x, self.angle_vehicle_lane_data_window)
+        self.angle_vehicle_lane_ax.set_ylim(np.min(self.angle_vehicle_lane_data_window),
+                                            np.max(self.angle_vehicle_lane_data_window))
 
         self.plot_canvas.draw()
 
@@ -249,10 +261,11 @@ class CockpitView(threading.Thread):
         self.plot_canvas = FigureCanvasTkAgg(self.plot_figure, master=self.root)
         self.plot_canvas.show()
 
-        self.steering_angle_ax = self.plot_figure.add_subplot(411, title="Steering Angle")
-        self.speed_ax = self.plot_figure.add_subplot(412, sharex=self.steering_angle_ax, title="Speed")
-        self.reward_ax = self.plot_figure.add_subplot(413, sharex=self.steering_angle_ax, title="Reward")
-        self.distance_ax = self.plot_figure.add_subplot(414, sharex=self.steering_angle_ax, title="Distance")
+        self.steering_angle_ax = self.plot_figure.add_subplot(511, title="Steering Angle")
+        self.speed_ax = self.plot_figure.add_subplot(512, sharex=self.steering_angle_ax, title="Speed")
+        self.reward_ax = self.plot_figure.add_subplot(513, sharex=self.steering_angle_ax, title="Reward")
+        self.distance_ax = self.plot_figure.add_subplot(514, sharex=self.steering_angle_ax, title="Distance")
+        self.angle_vehicle_lane_ax = self.plot_figure.add_subplot(515, sharex=self.steering_angle_ax, title="Angle Vehicle Lane")
 
         for l in self.steering_angle_ax.get_xticklabels():
             l.set_visible(False)
@@ -266,12 +279,17 @@ class CockpitView(threading.Thread):
             l.set_visible(False)
             l.set_fontsize(0.0)
 
-        self.distance_ax.set_xlabel("Simulation Time [ms]")
+        for l in self.distance_ax.get_xticklabels():
+            l.set_visible(False)
+            l.set_fontsize(0.0)
+
+        self.angle_vehicle_lane_ax.set_xlabel("Simulation Time [ms]")
 
         self.steerin_angle_points = self.steering_angle_ax.plot(0, 0, '-o', markersize=3)[0]
         self.reward_points = self.reward_ax.plot(0, 0, color='g', marker='o', markersize=3)[0]
         self.distance_points = self.distance_ax.plot(0, 0, 'r-o', markersize=3)[0]
         self.speed_points = self.speed_ax.plot(0, 0, 'c-o', markersize=3)[0]
+        self.angle_vehicle_lane_points = self.angle_vehicle_lane_ax.plot(0, 0, 'c-o', markersize=3)[0]
 
         # Arrange GUI Elements
         learn_checkbutton.grid(row=0, column=0)
