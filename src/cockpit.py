@@ -1,5 +1,6 @@
 import threading
 import Tkinter as Tk
+
 from vehicle_control.srv import *
 import rospy
 import numpy as np
@@ -125,6 +126,16 @@ class CockpitViewModel:
     def learn_changed(self, *args):
         self.net.should_learn = not self.net.should_learn
 
+    def set_weights_command(self, value):
+        if value.get() is not None:
+            weights = np.array([float(x) for x in value.get().split(',')], dtype=float)
+            self.net.set_weights(weights)
+        else:
+            print 'Keine Gewichte'
+
+
+
+
 
 class CockpitView(threading.Thread):
     def __init__(self, viewmodel):
@@ -244,6 +255,9 @@ class CockpitView(threading.Thread):
         self.root.protocol("WM_DELETE_WINDOW", self.callback)
 
         # Create GUI Elements
+        leftsiteframe = Tk.Frame(self.root)
+        entry_weights_field = Tk.Entry(self.root)
+        set_weights_button = Tk.Button(self.root, text="Set Weights", command=lambda: self.viewmodel.set_weights_command(entry_weights_field))
         learn_checkbutton = Tk.Checkbutton(self.root, text="Should Learn?", var=self.viewmodel.should_learn)
         self.use_last_checkbutton = Tk.Checkbutton(self.root, text="Use Last Reset Point?", var=self.viewmodel.use_last)
         reset_car_button = Tk.Button(self.root, text="Reset Car", command=self.viewmodel.reset_car_command)
@@ -292,15 +306,19 @@ class CockpitView(threading.Thread):
         self.angle_vehicle_lane_points = self.angle_vehicle_lane_ax.plot(0, 0, 'c-o', markersize=3)[0]
 
         # Arrange GUI Elements
-        learn_checkbutton.grid(row=0, column=0)
-        reset_car_button.grid(row=1, column=0)
-        self.use_last_checkbutton.grid(row=2, column=0)
-        reset_weights_button.grid(row=3, column=0)
+
+        leftsiteframe.grid(row=2, column=0)
+        learn_checkbutton.grid(row=3, column=0)
+        reset_car_button.grid(row=4, column=0)
+        self.use_last_checkbutton.grid(row=5, column=0)
+        reset_weights_button.grid(row=6, column=0)
+        set_weights_button.grid(row=7, column=0)
+        entry_weights_field.grid(row=8, column=0)
         # constant_weights_text.grid(row=2, column=1)
-        self.left_weights_mean_label.grid(row=4, column=0)
-        self.right_weights_mean_label.grid(row=4, column=1)
-        self.camera_label.grid(row=5,column=0)
-        self.weights_image_label.grid(row=6, column=0)
+        #self.left_weights_mean_label.grid(row=1, column=1)
+        #self.right_weights_mean_label.grid(row=2, column=1)
+        self.camera_label.grid(row=0,column=0)
+        self.weights_image_label.grid(row=1, column=0)
         #discount_factor_scale.grid(row=6, column=1)
         self.plot_canvas.get_tk_widget().grid(row=0, column=1, rowspan=7, sticky='nswe', columnspan=2)
 
