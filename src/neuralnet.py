@@ -229,8 +229,8 @@ class BaseNetwork:
     """ Defines a basic network with an input layer """
     __metaclass__ = ABCMeta
 
+
     def __init__(self):
-        # Network
         self._detectors = {}
         self._weights = None
         self._output_pop = None
@@ -715,9 +715,9 @@ class DeepNetwork(BaseNetwork):
                 weights_inout[counter] = temp_weights[0][j]
                 counter += 1
 
-        self.set_weights(weights, weights_inout)
+        self._set_weights(weights, weights_inout)
 
-    def set_weights(self, weights, weights_inout):
+    def _set_weights(self, weights, weights_inout):
         num_connections_in = NUM_IN_LEARNING_LAYER * self._number_neurons_per_layer
         num_connections_out = NUM_OUT_LEARNING_LAYER * self._number_neurons_per_layer
         connections = self.plastic_connections
@@ -726,7 +726,6 @@ class DeepNetwork(BaseNetwork):
             connections_inout.append(con)
         for con in self.plastic_connections[-num_connections_out:]:
             connections_inout.append(con)
-
         nest.nest.SetStatus(connections, [{'weight': w} for w in weights])
         nest.nest.SetStatus(connections_inout, [{'weight': w} for w in weights_inout])
 
