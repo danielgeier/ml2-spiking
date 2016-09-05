@@ -102,10 +102,6 @@ class CockpitViewModel:
         self.should_learn.trace("w", self.learn_changed)
 
     def update(self):
-        #formatstring = "%.4f"
-        #weights_mean = np.mean(self.net.get_weights(), axis=0)
-        #self.weights_mean_left.set(formatstring % weights_mean[0])
-        #self.weights_mean_right.set(formatstring % weights_mean[1])
         self.view.update()
 
     def reset_car_command(self):
@@ -170,7 +166,7 @@ class CockpitView(threading.Thread):
         self.root.destroy()
 
     def update(self):
-        #Update Camera picture
+        # Update Camera picture
         self._update_camera_image()
         self._update_weights_image()
         self._update_plots()
