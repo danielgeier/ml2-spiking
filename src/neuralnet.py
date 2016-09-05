@@ -981,7 +981,7 @@ def main(argv):
     if n.log:
         logger = NetworkLogger(network, log_period=10)
 
-    # cockpit_view = cockpit.CockpitViewModel(network)
+    cockpit_view = cockpit.CockpitViewModel(network, agent)
 
     while True:
         # Inject frame to network and start simulation
@@ -993,13 +993,7 @@ def main(argv):
         if n.log:
             logger.log()
 
-        # cockpit_view.update()
-
-        frame = network.last_frame.copy()
-        frame.T[50] = 255 - frame.T[50]
-        cv2.imshow('Cam', frame)
-        cv2.waitKey(1)
-
+        cockpit_view.update()
 
 if __name__ == '__main__':
     print "hello"

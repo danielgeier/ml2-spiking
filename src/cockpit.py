@@ -22,6 +22,7 @@ class MockLearner:
     def __init__(self):
         self.world = MockWorld()
 
+
 class MockState:
     @property
     def distance(self):
@@ -30,6 +31,21 @@ class MockState:
     @property
     def angle_vehicle_lane(self):
         return np.random.rand(1)
+
+
+class MockAgent:
+
+    def __init__(self):
+        self.should_learn = True
+
+    @property
+    def simduration(self):
+        return 20
+
+    @property
+    def learner(self):
+        return MockLearner()
+
 
 class MockWorld:
     def calculate_reward(self, actions):
@@ -43,7 +59,7 @@ class MockWorld:
 class MockNetwork:
     def __init__(self):
         self.weights = np.array([[3.0,2.0],[12.0,2.0]])*128
-        self.should_learn = True
+
         self._last_frame = None
         self._bridge = CvBridge()
         self.simduration = 10
@@ -80,7 +96,7 @@ class MockNetwork:
 
 
 class CockpitViewModel:
-    def __init__(self, net):
+    def __init__(self, net, agent):
         self.view = CockpitView(self)
 
         # Traced variables
@@ -92,10 +108,11 @@ class CockpitViewModel:
         # Important: Start view before initializing the variables
         self.view.start()
         self.net = net
+        self.agent = agent
 
     def initialize_view_model(self):
         self.should_learn = Tk.BooleanVar()
-        self.should_learn.set(self.net.should_learn)
+        self.should_learn.set(self.agent.should_learn)
         self.weights_mean_left = Tk.StringVar()
         self.weights_mean_right = Tk.StringVar()
         self.use_last = Tk.BooleanVar()
@@ -120,7 +137,7 @@ class CockpitViewModel:
         self.net.reset_weights()
 
     def learn_changed(self, *args):
-        self.net.should_learn = not self.net.should_learn
+        self.agent.should_learn = not self.agent.should_learn
 
     def set_weights_command(self, value):
         if value.get() is not None:
@@ -128,9 +145,6 @@ class CockpitViewModel:
             self.net.set_weights(weights)
         else:
             print 'Keine Gewichte'
-
-
-
 
 
 class CockpitView(threading.Thread):
@@ -205,11 +219,11 @@ class CockpitView(threading.Thread):
 
     def _update_plots(self):
         actions = self.viewmodel.net.decode_actions()
-        world = self.viewmodel.net.learner.world
+        world = self.viewmodel.agent.learner.world
         self.steering_angle_data_window[0] = actions['steering_angle']
         self.steering_angle_data_window = np.roll(self.steering_angle_data_window, -1)
 
-        x = np.arange(self.plot_step - self.window_size, self.plot_step) * self.viewmodel.net.simduration
+        x = np.arange(self.plot_step - self.window_size, self.plot_step) * self.viewmodel.agent.simduration
 
         self.steerin_angle_points.set_data(x, self.steering_angle_data_window)
         self.steering_angle_ax.set_xlim(np.min(x), np.max(x))
@@ -323,8 +337,9 @@ class CockpitView(threading.Thread):
 
 if __name__ == '__main__':
     network = MockNetwork()
-    cockpit_view = CockpitViewModel(network)
-    time.sleep(1)
+    agent_ = MockAgent()
+    cockpit_view = CockpitViewModel(network, agent_)
+    time.sleep(5)
 
     while True:
         cockpit_view.update()
