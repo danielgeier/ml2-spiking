@@ -475,6 +475,35 @@ class BaseNetworkIn(BaseNetwork):
         plotter.add_spike_train_plot(self.pop_encoded_image_r, label='Input Right')
 
 
+class VehicleLaneAlignmentNetworkIn(BaseNetwork):
+    def __init__(self, topic='/laneletInformation'):
+        super(VehicleLaneAlignmentNetworkIn, self).__init__()
+
+        self._vehicle_alignment_pop = Population(1, IF_curr_alpha, {'i_offset': 0, 'v_thresh': 100,
+                                                                    'tau_refrac': 0.1})
+
+        detector = nest.nest.Create('spike_detector', params={'withgid': True, 'withtime': True})[0]
+
+        self.detectors[self._vehicle_alignment_pop[0]] = detector
+
+        self._state = None
+        self._sub_lanelet = rospy.Subscriber(topic, Float64MultiArray, self._update_state, queue_size=1)
+        self.output_pop = self._vehicle_alignment_pop
+
+        # make sure we get at least one message before starting the training
+        rospy.wait_for_message(topic, Float64MultiArray)
+
+    def _update_state(self, state):
+        if len(state.data) > 0:
+            self._state = LaneletInformation(state.data)
+
+    def before_simulation(self):
+        i_offset = np.pi - np.abs(self._state.angle_vehicle_lane)
+        i_offset *= 30/np.pi
+        print "I-Offset Vehicle Alignment: ", i_offset
+        self._vehicle_alignment_pop.set(i_offset=i_offset)
+
+
 class BaseNetworkOut(BaseNetwork):
     def __init__(self):
         super(BaseNetworkOut, self).__init__()
@@ -691,14 +720,15 @@ class World(BaseWorld):
 
 
 class DeepNetwork(BaseNetwork):
-    def __init__(self, number_middle_layers, number_neurons_per_layer,
-                 should_learn=True, image_topic='/spiky/retina_image'):
+    def __init__(self, number_middle_layers, number_neurons_per_layer):
         super(DeepNetwork, self).__init__()
 
         self._middle_pops = []
 
         self._number_neurons_per_layer = number_neurons_per_layer
         self._number_middle_layers = number_middle_layers
+        self._incoming_population = None
+        self._outgoing_population = None
 
     def build_network(self, incoming_population, outgoing_population):
         """ Connects neurons from incoming population with the first hidden layer and neurons of the last hidden layer
@@ -738,6 +768,13 @@ class DeepNetwork(BaseNetwork):
 
         self.input_pop = self._middle_pops[0]
         self.output_pop = self._middle_pops[-1]
+
+        # IMPORTANT
+        # The names of these variables might be misleading. They are not the same populations as stored in input_pop and
+        # output_pop. While input_pop and output_pop are thought to be as interface to plug other networks to, the variables
+        # below store the populations that were plugged into this network
+        self._incoming_population = incoming_population
+        self._outgoing_population = outgoing_population
 
         self.reset_weights()
 
@@ -927,7 +964,6 @@ class CompositeNetwork(BaseNetwork):
         self._actor_network = kwargs['actor_network']
         self._camera_network = kwargs['camera_network']
 
-
     def before_simulation(self):
         for network in self._networks:
             network.before_simulation()
@@ -960,22 +996,56 @@ class CompositeNetwork(BaseNetwork):
 
 
 class NetworkBuilder:
+    def __init__(self):
+        pass
+
+    class PassiveBraitenbergNetwork(BraitenbergNetwork):
+        def after_learning(self):
+            pass
+
+    class DeepNetworkWithVehicleLaneAlignment(DeepNetwork):
+        def __init__(self, number_middle_layers, number_neurons_per_layer):
+            super(NetworkBuilder.DeepNetworkWithVehicleLaneAlignment, self).__init__(number_middle_layers,
+                                                                                     number_neurons_per_layer)
+            self._vehicle_lane_alignment = VehicleLaneAlignmentNetworkIn()
+            self._projection = None
+
+        def build_network(self, incoming_population, outgoing_population):
+            super(NetworkBuilder.DeepNetworkWithVehicleLaneAlignment, self).build_network(incoming_population, outgoing_population)
+            self._projection = Projection(self._vehicle_lane_alignment.output_pop, self._middle_pops[0],
+                                          AllToAllConnector())
+            self.detectors = dict(self.detectors.items() + self._vehicle_lane_alignment.detectors.items())
+
+        def before_simulation(self):
+            super(NetworkBuilder.DeepNetworkWithVehicleLaneAlignment, self).before_simulation()
+            self._vehicle_lane_alignment.before_simulation()
+
+        def populate_plotter(self, plotter):
+            super(NetworkBuilder.DeepNetworkWithVehicleLaneAlignment, self).populate_plotter(plotter)
+            plotter.add_spike_train_plot(self._vehicle_lane_alignment.output_pop, 'Vehicle Alignment')
+
     @staticmethod
     def braitenberg_network():
         pass
 
     @staticmethod
-    def braitenberg_deep_network():
-        class PassiveBraitenbergNetwork(BraitenbergNetwork):
-            def after_learning(self):
-                pass
+    def braitenberg_deep_network(number_middle_layers=2, number_neurons_per_layer=5):
+        braitenberg = NetworkBuilder.PassiveBraitenbergNetwork()
 
-            def postsynaptic_learning_neurons(self):
-                return []
+        deepnetwork = DeepNetwork(number_middle_layers, number_neurons_per_layer)
+        actor_network = BaseNetworkOut()
 
-        braitenberg = PassiveBraitenbergNetwork()
+        deepnetwork.build_network(braitenberg.output_pop, actor_network.input_pop)
 
-        deepnetwork = DeepNetwork(2, 5)
+        n = CompositeNetwork(braitenberg, deepnetwork, actor_network,
+                             actor_network=actor_network, camera_network=braitenberg)
+
+        return n
+
+    @staticmethod
+    def braitenberg_deep_network_with_alignment_neuron(number_middle_layers=2, number_neurons_per_layer=5):
+        braitenberg = NetworkBuilder.PassiveBraitenbergNetwork()
+        deepnetwork = NetworkBuilder.DeepNetworkWithVehicleLaneAlignment(number_middle_layers,number_neurons_per_layer)
         actor_network = BaseNetworkOut()
 
         deepnetwork.build_network(braitenberg.output_pop, actor_network.input_pop)
@@ -1007,16 +1077,14 @@ def main(argv):
 
     world = World()
 
-
     network = BraitenbergNetwork()
     # network = DeepNetwork(number_middle_layers=2, number_neurons_per_layer=10)
-    #network = NetworkBuilder.braitenberg_deep_network()
+    network = NetworkBuilder.braitenberg_deep_network_with_alignment_neuron()
 
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2,
                                    DISCOUNT_FACTOR, TIME_STEP, LEARNING_RATE)
 
     agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=True, network=network)
-
 
     n.plot = True
     if n.plot:
