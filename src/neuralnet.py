@@ -149,7 +149,7 @@ class ReinforcementLearner(Learner):
         self._update_weights()
 
         print "z: ", self._eligibility_trace
-        print "w: ", self._weights
+        print "w: (", len(self._weights) ,")", self._weights
 
     def _update_spikes(self):
         # TODO: This might be slower than previous implementation. It would be better to sort
@@ -174,6 +174,7 @@ class ReinforcementLearner(Learner):
         pass
 
     def _update_weights(self):
+        # self._learning_rate *= 0.99
         # get reward from world
         reward = self.world.calculate_reward(self.network.decode_actions())
 
@@ -211,12 +212,11 @@ class SteeringHelper:
 
     def calculate_steering(self, spikes_diff):
 
-
-        if spikes_diff >= 0: # pos
+        if spikes_diff >= 0:  # pos
             self._left[0] = spikes_diff
             self._left = np.roll(self._left, -1)
 
-        if spikes_diff <= 0: #neg
+        if spikes_diff <= 0:  # neg
             self._right[0] = spikes_diff
             self._right = np.roll(self._right, -1)
 
@@ -241,7 +241,6 @@ class SteeringHelper:
 class BaseNetwork:
     """ Defines a basic network with an input layer """
     __metaclass__ = ABCMeta
-
 
     def __init__(self):
         self._detectors = {}
@@ -485,6 +484,7 @@ class VehicleLaneAlignmentNetworkIn(BaseNetwork):
         detector = nest.nest.Create('spike_detector', params={'withgid': True, 'withtime': True})[0]
 
         self.detectors[self._vehicle_alignment_pop[0]] = detector
+        nest.nest.Connect(self._vehicle_alignment_pop[0], detector)
 
         self._state = None
         self._sub_lanelet = rospy.Subscriber(topic, Float64MultiArray, self._update_state, queue_size=1)
@@ -560,6 +560,7 @@ class BaseNetworkOut(BaseNetwork):
     def populate_plotter(self, plotter):
         super(BaseNetworkOut, self).populate_plotter(plotter)
         plotter.add_spike_train_plot(self.output_pop, 'Actor R/L')
+
 
 class BraitenbergNetwork(BaseNetwork):
     def __init__(self, image_topic='/spiky/retina_image'):
@@ -649,6 +650,12 @@ class World(BaseWorld):
         self._last_distance = None
         self._last_angle_vehicle_lane = None
 
+    def _calculate_reward(self, actions):
+        if actions['steering_angle'] < 0:
+            return 20
+        else:
+            return -20
+
     def calculate_reward(self, actions):
         state = self._state
 
@@ -734,10 +741,7 @@ class DeepNetwork(BaseNetwork):
                 self.detectors[neuron] = detector
                 nest.nest.Connect(neuron, detector)
 
-        # Connect last middle layer to output
-        left_out_connection = Projection(self._middle_pops[self._number_middle_layers - 1], outgoing_population,
-                                         AllToAllConnector())
-        right_out_connection = Projection(self._middle_pops[self._number_middle_layers - 1], outgoing_population,
+        connection = Projection(self._middle_pops[self._number_middle_layers - 1], outgoing_population,
                                           AllToAllConnector())
 
         # Here go the neurons whose presynaptic connections are
@@ -754,14 +758,18 @@ class DeepNetwork(BaseNetwork):
 
         # IMPORTANT
         # The names of these variables might be misleading. They are not the same populations as stored in input_pop and
-        # output_pop. While input_pop and output_pop are thought to be as interface to plug other networks to, the variables
-        # below store the populations that were plugged into this network
+        # output_pop. While input_pop and output_pop are thought to be as interface to plug other networks to,
+        # the variables below store the populations that were plugged into this network
         self._incoming_population = incoming_population
         self._outgoing_population = outgoing_population
 
         self.reset_weights()
 
     def reset_weights(self):
+        weights = np.random.uniform(-1.5, 2, len(self.plastic_connections)) * 2500
+        self.set_weights(weights)
+
+    def _reset_weights(self):
         weights = np.random.uniform(-1.5, 2, len(self.plastic_connections)) * 2500
         weights_inout = np.zeros(((NUM_OUT_LEARNING_LAYER + NUM_IN_LEARNING_LAYER) * self._number_neurons_per_layer),
                                  dtype=Float64MultiArray)
@@ -983,8 +991,13 @@ class NetworkBuilder:
         pass
 
     class PassiveBraitenbergNetwork(BraitenbergNetwork):
+        def __init__(self):
+            super(NetworkBuilder.PassiveBraitenbergNetwork, self).__init__()
+            self.postsynaptic_learning_neurons = []
+
         def after_learning(self):
             pass
+
 
     class DeepNetworkWithVehicleLaneAlignment(DeepNetwork):
         def __init__(self, number_middle_layers, number_neurons_per_layer):
@@ -1060,14 +1073,14 @@ def main(argv):
 
     world = World()
 
-    network = BraitenbergNetwork()
+    # network = BraitenbergNetwork()
     # network = DeepNetwork(number_middle_layers=2, number_neurons_per_layer=10)
-    network = NetworkBuilder.braitenberg_deep_network_with_alignment_neuron()
+    network = NetworkBuilder.braitenberg_deep_network_with_alignment_neuron(1, 5)
 
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2,
                                    DISCOUNT_FACTOR, TIME_STEP, LEARNING_RATE)
 
-    agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=True, network=network)
+    agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=False, network=network)
 
     n.plot = True
     if n.plot:
