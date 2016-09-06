@@ -483,6 +483,8 @@ class BaseNetworkOut(BaseNetwork):
         self._build_output_layer()
         self._create_spike_detectors()
         self._steering_helper = SteeringHelper(window_size=20)
+        self._last_angles = np.zeros(4)
+        self._last_angle = 0.
 
     def _build_output_layer(self):
         self.output_pop = Population(2, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(2)})
@@ -502,18 +504,33 @@ class BaseNetworkOut(BaseNetwork):
         num_spikes_r = spikes[1]
         num_spikes_diff = float(np.power(num_spikes_l, 2) - np.power(num_spikes_r, 2))
 
-        angle = self._steering_helper.calculate_steering(num_spikes_diff)
+        angle = float(self._steering_helper.calculate_steering(num_spikes_diff))
+        tmp = angle
+        self._last_angles[0] = angle
+        self._last_angles = np.roll(self._last_angles, -1)
 
-        print angle
+        angle_avg = np.average(self._last_angles)
+        print angle , ' angle'
+        print self._last_angles , 'last'
         #angle = num_spikes_diff / 10  # minus = rechts
+        if angle < 0.8:
+            if angle_avg < 0.3:
+                angle *=0.5
+            if not(((angle >=0) and (self._last_angle >=0)) or ((angle <= 0) and (self._last_angle <= 0))):
+                 print '-----------------------------------'
+                 print str(angle) , 'angle'
+                 print self._last_angle, 'last'
+                 angle = 0. #max(angle,self._last_angle) - min(angle,self._last_angle)
 
         brake = 0
+
         # gas = 1.0 / (np.sqrt(abs(angle)) + 2.5)
         if np.abs(angle) > 0.5:
-            gas = np.max(((1 - np.abs(angle)) * 0.5, 0.2))
+            gas = np.max(((1 - np.abs(angle)) * 0.5, 0.4))
         else:
             gas = 0.5
         actions = {'gas': gas, 'brake': brake, 'steering_angle': angle}
+        self._last_angle = tmp
 
         return actions
 
