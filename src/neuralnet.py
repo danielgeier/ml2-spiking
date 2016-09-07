@@ -250,6 +250,7 @@ class BraitenbergSteeringHelper:
         spikes_diff = num_spikes_l - num_spikes_r
         spikes_diff = 0 if np.abs(spikes_diff) <= self._spikes_threshold else spikes_diff
 
+        print spikes_diff, ':Spikesdiff'
         return spikes_diff / self._spikes_max
 
 
@@ -592,6 +593,7 @@ class BaseNetworkOut(BaseNetwork):
         else:
             gas = 0.5
 
+        print gas, ':gas'
         actions = {'gas': gas, 'brake': brake, 'steering_angle': angle}
 
         return actions
@@ -816,17 +818,17 @@ class DeepNetwork(BaseNetwork):
         self.reset_weights()
 
     def reset_weights(self):
-        weights = np.random.uniform(-1.5, 2, len(self.plastic_connections)) * 2500
+        weights = np.random.uniform(0.1, 2, len(self.plastic_connections)) * 2500
         self.set_weights(weights)
 
     def _reset_weights(self):
-        weights = np.random.uniform(-1.5, 2, len(self.plastic_connections)) * 2500
+        weights = np.random.uniform(0.1, 2, len(self.plastic_connections)) * 2500
         weights_inout = np.zeros(((NUM_OUT_LEARNING_LAYER + NUM_IN_LEARNING_LAYER) * self._number_neurons_per_layer),
                                  dtype=Float64MultiArray)
         counter = 0
         for i in range(NUM_OUT_LEARNING_LAYER + NUM_IN_LEARNING_LAYER):
             temp_weights = (np.random.dirichlet(np.ones(self._number_neurons_per_layer), size=1)) * 100
-            temp_weights_avg = np.average(temp_weights)
+            temp_weights_avg = np.median(temp_weights)
             temp_weights[:] = [x - temp_weights_avg for x in temp_weights]
             temp_weights *= 250
 
@@ -1126,13 +1128,13 @@ def main(argv):
 
     world = World()
 
-    # network = BraitenbergNetwork()
+    #network = BraitenbergNetwork()
     network = NetworkBuilder.braitenberg_deep_network(2, 5)
 
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2,
                                    DISCOUNT_FACTOR, TIME_STEP, LEARNING_RATE)
 
-    agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=False, network=network)
+    agent = SnnAgent(timestep=TIME_STEP, simduration=50, learner=learner, should_learn=False, network=network)
 
     n.plot = True
     if n.plot:
