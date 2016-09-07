@@ -1,5 +1,7 @@
 from __future__ import division
 
+from macpath import norm_error
+
 from abc import ABCMeta, abstractmethod, abstractproperty
 
 import cv2
@@ -203,12 +205,11 @@ class ReinforcementLearner(Learner):
         self._weights = weights
 
 
-class SteeringHelper:
-    def __init__(self, window_size):
-        self._window_size = window_size
-        self._left = np.zeros(window_size)
-        self._right = np.zeros(window_size)
-        print 'init steeringhelper'
+class NormalizedSteeringHelper(object):
+    def __init__(self, normalize_angle_wsize):
+        self._window_size = normalize_angle_wsize
+        self._left = np.zeros(normalize_angle_wsize)
+        self._right = np.zeros(normalize_angle_wsize)
 
     def calculate_steering(self, spikes_diff):
 
@@ -236,6 +237,30 @@ class SteeringHelper:
     def running_mean(x, n):
         cumsum = np.cumsum(np.insert(x, 0, 0))
         return (cumsum[n:] - cumsum[:-n]) / n
+
+
+class SmoothSteeringHelper(NormalizedSteeringHelper):
+    def __init__(self, normalize_angle_wsize, smooth_angle_wsize):
+        super(SmoothSteeringHelper, self).__init__(normalize_angle_wsize)
+        self._last_angles = np.zeros(smooth_angle_wsize)
+        self._last_angle = 0.
+
+    def calculate_steering(self, spikes_diff):
+        angle = super(SmoothSteeringHelper, self).calculate_steering(spikes_diff)
+
+        tmp = angle
+        self._last_angles[0] = angle
+        self._last_angles = np.roll(self._last_angles, -1)
+
+        angle_avg = np.average(self._last_angles)
+        # angle = num_spikes_diff / 10  # minus = rechts
+        if angle < 0.8:
+            if angle_avg < 0.3:
+                angle *= 0.5
+            if not (((angle >= 0) and (self._last_angle >= 0)) or ((angle <= 0) and (self._last_angle <= 0))):
+                angle = 0.  # max(angle,self._last_angle) - min(angle,self._last_angle)
+
+        return angle
 
 
 class BaseNetwork:
@@ -505,15 +530,13 @@ class VehicleLaneAlignmentNetworkIn(BaseNetwork):
 
 
 class BaseNetworkOut(BaseNetwork):
-    def __init__(self):
+    def __init__(self, steering_helper=NormalizedSteeringHelper(normalize_angle_wsize=20)):
         super(BaseNetworkOut, self).__init__()
         self._last_action = None
         self._car_update_publisher = rospy.Publisher('/AADC_AudiTT/carUpdate', Vector3, queue_size=1)
         self._build_output_layer()
         self._create_spike_detectors()
-        self._steering_helper = SteeringHelper(window_size=20)
-        self._last_angles = np.zeros(4)
-        self._last_angle = 0.
+        self._steering_helper = steering_helper
 
     def _build_output_layer(self):
         self.output_pop = Population(2, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(2)})
@@ -532,34 +555,15 @@ class BaseNetworkOut(BaseNetwork):
         num_spikes_l = spikes[0]
         num_spikes_r = spikes[1]
         num_spikes_diff = float(np.power(num_spikes_l, 2) - np.power(num_spikes_r, 2))
-
-        angle = float(self._steering_helper.calculate_steering(num_spikes_diff))
-        tmp = angle
-        self._last_angles[0] = angle
-        self._last_angles = np.roll(self._last_angles, -1)
-
-        angle_avg = np.average(self._last_angles)
-        print angle , ' angle'
-        print self._last_angles , 'last'
-        #angle = num_spikes_diff / 10  # minus = rechts
-        if angle < 0.8:
-            if angle_avg < 0.3:
-                angle *=0.5
-            if not(((angle >=0) and (self._last_angle >=0)) or ((angle <= 0) and (self._last_angle <= 0))):
-                 print '-----------------------------------'
-                 print str(angle) , 'angle'
-                 print self._last_angle, 'last'
-                 angle = 0. #max(angle,self._last_angle) - min(angle,self._last_angle)
-
         brake = 0
 
-        # gas = 1.0 / (np.sqrt(abs(angle)) + 2.5)
+        angle = self._steering_helper.calculate_steering(num_spikes_diff)
+
         if np.abs(angle) > 0.5:
             gas = np.max(((1 - np.abs(angle)) * 0.5, 0.4))
         else:
             gas = 0.5
         actions = {'gas': gas, 'brake': brake, 'steering_angle': angle}
-        self._last_angle = tmp
 
         return actions
 
@@ -586,7 +590,7 @@ class BraitenbergNetwork(BaseNetwork):
         self._right_connection = None
 
         self._network_in = BaseNetworkIn(image_topic)
-        self._network_out = BaseNetworkOut()
+        self._network_out = BaseNetworkOut(steering_helper=SmoothSteeringHelper(smooth_angle_wsize=3, normalize_angle_wsize=20))
 
         self.postsynaptic_learning_neurons = self._network_in.postsynaptic_learning_neurons + \
                                              self._network_out.postsynaptic_learning_neurons
@@ -1090,9 +1094,8 @@ def main(argv):
 
     world = World()
 
-    # network = BraitenbergNetwork()
-    # network = DeepNetwork(number_middle_layers=2, number_neurons_per_layer=10)
-    network = NetworkBuilder.braitenberg_deep_network_with_alignment_neuron(1, 5)
+    network = BraitenbergNetwork()
+    # network = NetworkBuilder.braitenberg_deep_network(2, 5)
 
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2,
                                    DISCOUNT_FACTOR, TIME_STEP, LEARNING_RATE)
