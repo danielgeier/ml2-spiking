@@ -26,6 +26,7 @@ import logging.handlers as handlers
 import logging
 import cockpit
 
+
 from std_msgs.msg import Bool, Float64MultiArray
 
 # Logging/Dumping locations
@@ -210,6 +211,8 @@ class NormalizedSteeringHelper(object):
         self._window_size = normalize_angle_wsize
         self._left = np.zeros(normalize_angle_wsize)
         self._right = np.zeros(normalize_angle_wsize)
+        self._avg_left= 0
+        self._avg_right = 0
 
     def calculate_steering(self, num_spikes_l, num_spikes_r):
         spikes_diff = num_spikes_l - num_spikes_r
@@ -222,15 +225,15 @@ class NormalizedSteeringHelper(object):
             self._right[0] = spikes_diff
             self._right = np.roll(self._right, -1)
 
-        avg_left = np.max(self._left)
-        avg_right = np.min(self._right)
+        self._avg_left = max(self._avg_left, np.max(self._left))
+        self._avg_right = min(np.min(self._right), self._avg_right)
 
         angle = spikes_diff / 10
 
-        if (spikes_diff >= 0) and (avg_left != 0.):
-            angle = min(1, spikes_diff / avg_left)  # minus = rechts
-        if (spikes_diff < 0) and (avg_right != 0.):
-            angle = max(-1, spikes_diff / abs(avg_right))  # minus = rechts
+        if (spikes_diff >= 0) and (self._avg_left != 0.):
+            angle = min(1, spikes_diff / self._avg_left)  # minus = rechts
+        if (spikes_diff < 0) and (self._avg_right != 0.):
+            angle = max(-1, spikes_diff / abs(self._avg_right))  # minus = rechts
 
         print "Spikes Difference: ", spikes_diff, ", Angle: ", angle
         return angle
@@ -249,8 +252,6 @@ class BraitenbergSteeringHelper:
     def calculate_steering(self, num_spikes_l, num_spikes_r):
         spikes_diff = num_spikes_l - num_spikes_r
         spikes_diff = 0 if np.abs(spikes_diff) <= self._spikes_threshold else spikes_diff
-
-        print spikes_diff, ':Spikesdiff'
         return spikes_diff / self._spikes_max
 
 
@@ -1134,7 +1135,7 @@ def main(argv):
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2,
                                    DISCOUNT_FACTOR, TIME_STEP, LEARNING_RATE)
 
-    agent = SnnAgent(timestep=TIME_STEP, simduration=50, learner=learner, should_learn=False, network=network)
+    agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=False, network=network)
 
     n.plot = True
     if n.plot:

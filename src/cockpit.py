@@ -15,6 +15,8 @@ import sensor_msgs.msg as rosmsg
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2TkAgg
 from matplotlib.figure import Figure
 
+import re
+
 # Mock-Classes for test-purposes
 
 
@@ -141,7 +143,7 @@ class CockpitViewModel:
 
     def set_weights_command(self, value):
         if value.get() is not None:
-            weights = np.array([float(x) for x in value.get().split(',')], dtype=float)
+            weights = np.array([float(x) for x in (re.split(',|\s+',value.get())) if x != ''], dtype=float)
             self.net.set_weights(weights)
         else:
             print 'Keine Gewichte'
