@@ -211,7 +211,8 @@ class NormalizedSteeringHelper(object):
         self._left = np.zeros(normalize_angle_wsize)
         self._right = np.zeros(normalize_angle_wsize)
 
-    def calculate_steering(self, spikes_diff):
+    def calculate_steering(self, num_spikes_l, num_spikes_r):
+        spikes_diff = num_spikes_l - num_spikes_r
 
         if spikes_diff >= 0:  # pos
             self._left[0] = spikes_diff
@@ -231,6 +232,7 @@ class NormalizedSteeringHelper(object):
         if (spikes_diff < 0) and (avg_right != 0.):
             angle = max(-1, spikes_diff / abs(avg_right))  # minus = rechts
 
+        print "Spikes Difference: ", spikes_diff, ", Angle: ", angle
         return angle
 
     @staticmethod
@@ -239,27 +241,53 @@ class NormalizedSteeringHelper(object):
         return (cumsum[n:] - cumsum[:-n]) / n
 
 
+class BraitenbergSteeringHelper:
+    def __init__(self, spikes_threshold=3, spikes_max=7):
+        self._spikes_threshold = spikes_threshold
+        self._spikes_max = spikes_max
+
+    def calculate_steering(self, num_spikes_l, num_spikes_r):
+        spikes_diff = num_spikes_l - num_spikes_r
+        spikes_diff = 0 if np.abs(spikes_diff) <= self._spikes_threshold else spikes_diff
+
+        return spikes_diff / self._spikes_max
+
+
 class SmoothSteeringHelper(NormalizedSteeringHelper):
     def __init__(self, normalize_angle_wsize, smooth_angle_wsize):
         super(SmoothSteeringHelper, self).__init__(normalize_angle_wsize)
+        self._smooth_angle_wsize = smooth_angle_wsize
         self._last_angles = np.zeros(smooth_angle_wsize)
         self._last_angle = 0.
+        self._decay = np.exp(-np.arange(self._smooth_angle_wsize) * TIME_STEP / TAU)
+        self._decay = self._decay[::-1]
 
-    def calculate_steering(self, spikes_diff):
-        angle = super(SmoothSteeringHelper, self).calculate_steering(spikes_diff)
+    def calculate_steering(self, num_spikes_l, num_spikes_r):
+        angle = super(SmoothSteeringHelper, self).calculate_steering(num_spikes_l, num_spikes_r)
 
-        tmp = angle
         self._last_angles[0] = angle
         self._last_angles = np.roll(self._last_angles, -1)
 
-        angle_avg = np.average(self._last_angles)
-        # angle = num_spikes_diff / 10  # minus = rechts
-        if angle < 0.8:
-            if angle_avg < 0.3:
-                angle *= 0.5
-            if not (((angle >= 0) and (self._last_angle >= 0)) or ((angle <= 0) and (self._last_angle <= 0))):
-                angle = 0.  # max(angle,self._last_angle) - min(angle,self._last_angle)
+        x = self._last_angles
 
+        weights = np.zeros(self._smooth_angle_wsize)
+        weights[x > 0] = np.count_nonzero(x > 0)
+        weights[x < 0] = np.count_nonzero(x < 0)
+        weights[x == 0] = np.count_nonzero(x == 0)
+        weights /= sum(weights)
+        weights *= self._decay
+
+        # angle_avg = np.average(self._last_angles, weights)
+        # angle = num_spikes_diff / 10  # minus = rechts
+
+        #if angle < 0.8:
+        #    if angle_avg < 0.3:
+        #        angle *= 0.5
+        #    if not (((angle >= 0) and (self._last_angle >= 0)) or ((angle <= 0) and (self._last_angle <= 0))):
+        #        angle = 0.  # max(angle,self._last_angle) - min(angle,self._last_angle)
+
+        angle = 0 if abs(angle) <= 0.3 else angle
+        print "Smooth angle: ", angle
         return angle
 
 
@@ -467,7 +495,7 @@ class BaseNetworkIn(BaseNetwork):
         self.projection_out_l[2]._set_weight(4.0)
         self.projection_out_r[3]._set_weight(4.0)
 
-        self.ouput_pop = [self.pop_input_image_r, self.pop_input_image_l]
+        self.output_pop = [self.pop_input_image_r, self.pop_input_image_l]
 
     def _handle_frame(self, frame):
         self._last_frame = self._bridge.imgmsg_to_cv2(frame)
@@ -554,15 +582,16 @@ class BaseNetworkOut(BaseNetwork):
         # last two are output neurons
         num_spikes_l = spikes[0]
         num_spikes_r = spikes[1]
-        num_spikes_diff = float(np.power(num_spikes_l, 2) - np.power(num_spikes_r, 2))
+
         brake = 0
 
-        angle = self._steering_helper.calculate_steering(num_spikes_diff)
+        angle = self._steering_helper.calculate_steering(num_spikes_l, num_spikes_r)
 
         if np.abs(angle) > 0.5:
             gas = np.max(((1 - np.abs(angle)) * 0.5, 0.4))
         else:
             gas = 0.5
+
         actions = {'gas': gas, 'brake': brake, 'steering_angle': angle}
 
         return actions
@@ -590,7 +619,7 @@ class BraitenbergNetwork(BaseNetwork):
         self._right_connection = None
 
         self._network_in = BaseNetworkIn(image_topic)
-        self._network_out = BaseNetworkOut(steering_helper=SmoothSteeringHelper(smooth_angle_wsize=3, normalize_angle_wsize=20))
+        self._network_out = BaseNetworkOut(steering_helper=BraitenbergSteeringHelper())  # )
 
         self.postsynaptic_learning_neurons = self._network_in.postsynaptic_learning_neurons + \
                                              self._network_out.postsynaptic_learning_neurons
@@ -625,7 +654,7 @@ class BraitenbergNetwork(BaseNetwork):
         plotter.add_spike_train_plot(self.output_pop, 'Braitenberg R/L')
 
     def reset_weights(self):
-        weights = np.array([1.0, -0.3, -0.3, 1.0]) * 3000
+        weights = np.array([1.0, -0.3, -0.5, 1.2]) * 3000
         self.set_weights(weights)
 
     def decode_actions(self):
@@ -1014,6 +1043,8 @@ class NetworkBuilder:
     class PassiveBraitenbergNetwork(BraitenbergNetwork):
         def __init__(self):
             super(NetworkBuilder.PassiveBraitenbergNetwork, self).__init__()
+            # We have to set the postsynaptic learning neurons to an empty set.
+            # Otherwise the learner will assume that this part of the network contains STDP-connections.
             self.postsynaptic_learning_neurons = []
 
         def after_learning(self):
@@ -1050,7 +1081,7 @@ class NetworkBuilder:
         braitenberg = NetworkBuilder.PassiveBraitenbergNetwork()
 
         deepnetwork = DeepNetwork(number_middle_layers, number_neurons_per_layer)
-        actor_network = BaseNetworkOut()
+        actor_network = BaseNetworkOut(steering_helper=NormalizedSteeringHelper(normalize_angle_wsize=50))
 
         deepnetwork.build_network(braitenberg.output_pop, actor_network.input_pop)
 
@@ -1082,6 +1113,7 @@ def create_argument_parser():
     parser = argparse.ArgumentParser(description='Spiking Neural Network Node')
     parser.add_argument('-p', '--plot', action='store_true')
     parser.add_argument('-l', '--log', action='store_true')
+    parser.add_argument('-c', '--cockpit', action='store_true')
     return parser
 
 
@@ -1094,8 +1126,8 @@ def main(argv):
 
     world = World()
 
-    network = BraitenbergNetwork()
-    # network = NetworkBuilder.braitenberg_deep_network(2, 5)
+    # network = BraitenbergNetwork()
+    network = NetworkBuilder.braitenberg_deep_network(2, 5)
 
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2,
                                    DISCOUNT_FACTOR, TIME_STEP, LEARNING_RATE)
@@ -1106,11 +1138,13 @@ def main(argv):
     if n.plot:
         plotter = NetworkPlotter(agent, plot_steps=20)
 
-    # n.log = True
+    n.log = False
     if n.log:
         logger = NetworkLogger(network, log_period=10)
 
-    cockpit_view = cockpit.CockpitViewModel(network, agent)
+    n.cockpit = True
+    if n.cockpit:
+        cockpit_view = cockpit.CockpitViewModel(network, agent)
 
     while True:
         # Inject frame to network and start simulation
@@ -1122,7 +1156,8 @@ def main(argv):
         if n.log:
             logger.log()
 
-        cockpit_view.update()
+        if n.cockpit:
+            cockpit_view.update()
 
 if __name__ == '__main__':
     print "hello"

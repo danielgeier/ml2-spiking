@@ -210,7 +210,9 @@ class CockpitView(threading.Thread):
         weights = self.viewmodel.net.get_weights()
         image = cv2.resize(weights, (300,300), interpolation=cv2.INTER_NEAREST)
         # image /= 4
-        image = cv2.normalize(image, image, 0, 1, cv2.NORM_MINMAX) * 255
+        image = np.uint8(cv2.normalize(image, image, 0, 1, cv2.NORM_MINMAX) * 255)
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        image = cv2.applyColorMap(image, cv2.COLORMAP_JET)
         image = Image.fromarray(image)
         image = ImageTk.PhotoImage(image)
 
