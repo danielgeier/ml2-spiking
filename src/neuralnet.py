@@ -42,7 +42,7 @@ TIME_STEP = 0.1  # ?
 # Parameters for reinforcement learning
 LEARNING_RATE = 0.01
 DISCOUNT_FACTOR = 0.5
-NUM_TRACE_STEPS = 10  # TODO better name
+NUM_TRACE_STEPS = 15  # TODO better name
 TAU = 2.  # ?
 BETA_SIGMA = 0.3  # ?
 SIGMA = 0.001
@@ -118,7 +118,8 @@ class ReinforcementLearner(Learner):
         self._neurons = set([])
         self._weights = None
         self._connections = None
-
+        self._decay = np.exp(-np.arange(self._steps_to_trace) * self._timestep / self._tau)
+        self._decay = self._decay[::-1]
         self._prepare_learner()
 
     def _prepare_learner(self):
@@ -184,13 +185,13 @@ class ReinforcementLearner(Learner):
         weights = np.array(nest.nest.GetStatus(self._connections, 'weight'))
 
         # exp(-(k-1)*delta_t/tau)
-        decay = np.exp(-np.arange(self._steps_to_trace) * self._timestep / self._tau)
+
         i = 0
         for connection in self._connections:
             postsyn_neuron = connection[1]
             presyn_neuron = connection[0]
 
-            zeta = np.sum(self._spikes[presyn_neuron][:-1] * decay)
+            zeta = np.sum(self._spikes[presyn_neuron][:-1] * self._decay)
             if self._spikes[postsyn_neuron][-1] > 0:
                 zeta *= self._beta_sigma
             else:
@@ -249,6 +250,7 @@ class BraitenbergSteeringHelper:
     def calculate_steering(self, num_spikes_l, num_spikes_r):
         spikes_diff = num_spikes_l - num_spikes_r
         spikes_diff = 0 if np.abs(spikes_diff) <= self._spikes_threshold else spikes_diff
+        print "Spikes Difference: ", spikes_diff
 
         return spikes_diff / self._spikes_max
 
@@ -297,6 +299,7 @@ class BaseNetwork:
 
     def __init__(self):
         self._detectors = {}
+        self._neuron_layer = {}
         self._weights = None
         self._output_pop = None
         self._input_pop = None
@@ -369,6 +372,9 @@ class BaseNetwork:
     def reset_weights(self):
         weights = np.random.uniform(-0.1, 1.0, len(self.plastic_connections)) * 5000
         self.set_weights(weights)
+
+    def get_events_spike_detectors(self):
+        return nest.nest.GetStatus([self.detectors[x] for x in self._postsynaptic_learning_neurons], keys='events')
 
     @property
     def postsynaptic_learning_neurons(self):
@@ -558,6 +564,15 @@ class VehicleLaneAlignmentNetworkIn(BaseNetwork):
 
 
 class BaseNetworkOut(BaseNetwork):
+
+    @property
+    def publish_car_actions(self):
+        return self._publish_car_actions
+
+    @publish_car_actions.setter
+    def publish_car_actions(self, value):
+        self._publish_car_actions = value
+
     def __init__(self, steering_helper=NormalizedSteeringHelper(normalize_angle_wsize=20)):
         super(BaseNetworkOut, self).__init__()
         self._last_action = None
@@ -565,6 +580,7 @@ class BaseNetworkOut(BaseNetwork):
         self._build_output_layer()
         self._create_spike_detectors()
         self._steering_helper = steering_helper
+        self._publish_car_actions = True
 
     def _build_output_layer(self):
         self.output_pop = Population(2, IF_curr_alpha, {'tau_refrac': 0.1, 'i_offset': np.zeros(2)})
@@ -604,7 +620,12 @@ class BaseNetworkOut(BaseNetwork):
         gas = actions['gas']
         brake = actions['brake']
         steering_angle = actions['steering_angle']
-        self._car_update_publisher.publish(gas, brake, steering_angle)
+
+        if self.publish_car_actions:
+            self._car_update_publisher.publish(gas, brake, steering_angle)
+        else:
+            print "Not Publishing Car Actions!"
+
         self._last_action = gas
 
     def populate_plotter(self, plotter):
@@ -782,6 +803,8 @@ class DeepNetwork(BaseNetwork):
             if i == 0:
                 # Connect input layer to first middle layer
                 p = Projection(incoming_population, self._middle_pops[i], AllToAllConnector())
+                for neuron in incoming_population:
+                    self._neuron_layer
             else:
                 # Connect latest middle layer to current
                 connection = Projection(self._middle_pops[i - 1], self._middle_pops[i], AllToAllConnector())
@@ -815,12 +838,12 @@ class DeepNetwork(BaseNetwork):
 
         self.reset_weights()
 
-    def reset_weights(self):
-        weights = np.random.uniform(-1.5, 2, len(self.plastic_connections)) * 2500
+    def _reset_weights(self):
+        weights = np.random.uniform(-0.5, 2, len(self.plastic_connections)) * 3000
         self.set_weights(weights)
 
-    def _reset_weights(self):
-        weights = np.random.uniform(-1.5, 2, len(self.plastic_connections)) * 2500
+    def reset_weights(self):
+        weights = np.random.uniform(-0.5, 2, len(self.plastic_connections)) * 3000
         weights_inout = np.zeros(((NUM_OUT_LEARNING_LAYER + NUM_IN_LEARNING_LAYER) * self._number_neurons_per_layer),
                                  dtype=Float64MultiArray)
         counter = 0
@@ -964,10 +987,11 @@ class NetworkLogger:
 
 
 class SnnAgent:
-    def __init__(self, timestep, simduration, network, learner, should_learn=False):
+    def __init__(self, timestep, simduration, network, learner, should_learn=False, actor_network=None):
         self.timestep = timestep
         self.simduration = simduration
         self.network = network
+        self.actor_network = actor_network
         self.learner = learner
         self.should_learn = should_learn
 
@@ -1041,8 +1065,8 @@ class NetworkBuilder:
         pass
 
     class PassiveBraitenbergNetwork(BraitenbergNetwork):
-        def __init__(self):
-            super(NetworkBuilder.PassiveBraitenbergNetwork, self).__init__()
+        def __init__(self, image_topic='/spiky/retina_image'):
+            super(NetworkBuilder.PassiveBraitenbergNetwork, self).__init__(image_topic)
             # We have to set the postsynaptic learning neurons to an empty set.
             # Otherwise the learner will assume that this part of the network contains STDP-connections.
             self.postsynaptic_learning_neurons = []
@@ -1073,22 +1097,23 @@ class NetworkBuilder:
             plotter.add_spike_train_plot(self._vehicle_lane_alignment.output_pop, 'Vehicle Alignment')
 
     @staticmethod
-    def braitenberg_network():
-        pass
+    def braitenberg_network(image_topic='/spiky/retina_image'):
+        network = BraitenbergNetwork(image_topic)
+        return network, network._network_out
 
     @staticmethod
-    def braitenberg_deep_network(number_middle_layers=2, number_neurons_per_layer=5):
-        braitenberg = NetworkBuilder.PassiveBraitenbergNetwork()
+    def braitenberg_deep_network(number_middle_layers=2, number_neurons_per_layer=5, image_topic='/spiky/retina_image'):
+        braitenberg = NetworkBuilder.PassiveBraitenbergNetwork(image_topic)
 
         deepnetwork = DeepNetwork(number_middle_layers, number_neurons_per_layer)
         actor_network = BaseNetworkOut(steering_helper=NormalizedSteeringHelper(normalize_angle_wsize=50))
 
         deepnetwork.build_network(braitenberg.output_pop, actor_network.input_pop)
 
-        n = CompositeNetwork(braitenberg, deepnetwork, actor_network,
-                             actor_network=actor_network, camera_network=braitenberg)
+        network = CompositeNetwork(braitenberg, deepnetwork, actor_network,
+                                   actor_network=actor_network, camera_network=braitenberg)
 
-        return n
+        return network, actor_network
 
     @staticmethod
     def braitenberg_deep_network_with_alignment_neuron(number_middle_layers=2, number_neurons_per_layer=5):
@@ -1098,10 +1123,10 @@ class NetworkBuilder:
 
         deepnetwork.build_network(braitenberg.output_pop, actor_network.input_pop)
 
-        n = CompositeNetwork(braitenberg, deepnetwork, actor_network,
+        network = CompositeNetwork(braitenberg, deepnetwork, actor_network,
                              actor_network=actor_network, camera_network=braitenberg)
 
-        return n
+        return network, actor_network
 
 
 class Configuration:
@@ -1126,13 +1151,14 @@ def main(argv):
 
     world = World()
 
-    # network = BraitenbergNetwork()
-    network = NetworkBuilder.braitenberg_deep_network(2, 5)
+    network, actor_network = NetworkBuilder.braitenberg_deep_network(number_middle_layers=2, number_neurons_per_layer=5, image_topic='/spiky/binary_image')
+    # network, actor_network = NetworkBuilder.braitenberg_network(image_topic='/spiky/binary_image')
 
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2,
                                    DISCOUNT_FACTOR, TIME_STEP, LEARNING_RATE)
 
-    agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=False, network=network)
+    agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=False, network=network,
+                     actor_network=actor_network)
 
     n.plot = True
     if n.plot:

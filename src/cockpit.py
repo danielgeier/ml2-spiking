@@ -1,19 +1,19 @@
-import threading
 import Tkinter as Tk
-
-from vehicle_control.srv import *
-import rospy
-import numpy as np
+import threading
 import time
-import Queue
-
+from pyNN import nest
 import cv2
-from cv_bridge import CvBridge
-from PIL import Image, ImageTk
+import networkx as nx
+import numpy as np
+import rospy
 import sensor_msgs.msg as rosmsg
-
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2TkAgg
+from PIL import Image, ImageTk
+from cv_bridge import CvBridge
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+import matplotlib.cm as cm
+from vehicle_control.srv import *
+
 
 # Mock-Classes for test-purposes
 
@@ -34,7 +34,6 @@ class MockState:
 
 
 class MockAgent:
-
     def __init__(self):
         self.should_learn = True
 
@@ -45,6 +44,14 @@ class MockAgent:
     @property
     def learner(self):
         return MockLearner()
+
+    @property
+    def actor_network(self):
+        class MockActorNetwork:
+            def __init__(self):
+                self.publish_car_actions = True
+
+        return MockActorNetwork()
 
 
 class MockWorld:
@@ -58,8 +65,6 @@ class MockWorld:
 
 class MockNetwork:
     def __init__(self):
-        self.weights = np.array([[3.0,2.0],[12.0,2.0]])*128
-
         self._last_frame = None
         self._bridge = CvBridge()
         self.simduration = 10
@@ -74,6 +79,24 @@ class MockNetwork:
             shape = np.shape(self._last_frame)
             self._width = shape[0]
             self._height = shape[1]
+
+        self.postsynaptic_learning_neurons = [5033, 5034, 5039, 5040, 5041, 5042, 5043, 5044, 5045, 5046, 5047, 5048]
+        self.plastic_connections = [[5027, 5039, 0, 50, 0], [5027, 5040, 0, 50, 1], [5027, 5041, 0, 50, 2],
+                                    [5027, 5042, 0, 50, 3], [5027, 5043, 0, 50, 4], [5027, 5044, 0, 50, 5],
+                                    [5027, 5045, 0, 50, 6], [5027, 5046, 0, 50, 7], [5027, 5047, 0, 50, 8],
+                                    [5027, 5048, 0, 50, 9], [5028, 5039, 0, 50, 0], [5028, 5040, 0, 50, 1],
+                                    [5028, 5041, 0, 50, 2], [5028, 5042, 0, 50, 3], [5028, 5043, 0, 50, 4],
+                                    [5028, 5044, 0, 50, 5], [5028, 5045, 0, 50, 6], [5028, 5046, 0, 50, 7],
+                                    [5028, 5047, 0, 50, 8], [5028, 5048, 0, 50, 9], [5039, 5033, 0, 51, 0],
+                                    [5039, 5034, 0, 51, 1], [5040, 5033, 0, 51, 0], [5040, 5034, 0, 51, 1],
+                                    [5041, 5033, 0, 51, 0], [5041, 5034, 0, 51, 1], [5042, 5033, 0, 51, 0],
+                                    [5042, 5034, 0, 51, 1], [5043, 5033, 0, 51, 0], [5043, 5034, 0, 51, 1],
+                                    [5044, 5033, 0, 51, 0], [5044, 5034, 0, 51, 1], [5045, 5033, 0, 51, 0],
+                                    [5045, 5034, 0, 51, 1], [5046, 5033, 0, 51, 0], [5046, 5034, 0, 51, 1],
+                                    [5047, 5033, 0, 51, 0], [5047, 5034, 0, 51, 1], [5048, 5033, 0, 51, 0],
+                                    [5048, 5034, 0, 51, 1]]
+
+        self.weights = np.random.rand(len(self.plastic_connections))
 
     def get_weights(self):
         return self.weights
@@ -117,7 +140,11 @@ class CockpitViewModel:
         self.weights_mean_right = Tk.StringVar()
         self.use_last = Tk.BooleanVar()
 
+        self.publish_car_actions = Tk.BooleanVar()
+        self.publish_car_actions.set(self.agent.actor_network.publish_car_actions)
+
         self.should_learn.trace("w", self.learn_changed)
+        self.publish_car_actions.trace("w", self.publish_car_actions_changed)
 
     def update(self):
         self.view.update()
@@ -138,6 +165,10 @@ class CockpitViewModel:
 
     def learn_changed(self, *args):
         self.agent.should_learn = not self.agent.should_learn
+
+    def publish_car_actions_changed(self, *args):
+        self.agent.actor_network.publish_car_actions = self.publish_car_actions.get()
+        print "Publis Car Actions: ", self.publish_car_actions.get()
 
     def set_weights_command(self, value):
         if value.get() is not None:
@@ -186,6 +217,16 @@ class CockpitView(threading.Thread):
         self.speed_data_window = np.zeros(self.window_size)
         self.angle_vehicle_lane_data_window = np.zeros(self.window_size)
 
+        # Network Plot
+        self.network_plot = None
+        self.network_plot_canvas = None
+        self.network_plot_ax = None
+
+        # Graph and Node positions
+        self._nodes_pos = None
+        self._G = None
+
+
     def callback(self):
         self.root.quit()
         self.root.destroy()
@@ -195,11 +236,12 @@ class CockpitView(threading.Thread):
         self._update_camera_image()
         self._update_weights_image()
         self._update_plots()
+        self._update_graph()
         self.plot_step += 1
 
     def _update_camera_image(self):
         frame = self.viewmodel.net.last_frame
-        image = cv2.resize(frame, (0,0), fx=3, fy=3, interpolation=cv2.INTER_LINEAR)
+        image = cv2.resize(frame, (0, 0), fx=3, fy=3, interpolation=cv2.INTER_LINEAR)
         image = Image.fromarray(image)
         image = ImageTk.PhotoImage(image)
 
@@ -208,11 +250,14 @@ class CockpitView(threading.Thread):
 
     def _update_weights_image(self):
         weights = self.viewmodel.net.get_weights()
-        image = cv2.resize(weights, (300,300), interpolation=cv2.INTER_NEAREST)
-        # image /= 4
+        image = cv2.resize(weights, (300, 300), interpolation=cv2.INTER_NEAREST)
+
+        # Convert to UC81
         image = np.uint8(cv2.normalize(image, image, 0, 1, cv2.NORM_MINMAX) * 255)
         image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-        image = cv2.applyColorMap(image, cv2.COLORMAP_JET)
+
+        # Apply Colormap
+        image = cv2.applyColorMap(image, cv2.COLORMAP_BONE)
         image = Image.fromarray(image)
         image = ImageTk.PhotoImage(image)
 
@@ -229,7 +274,8 @@ class CockpitView(threading.Thread):
 
         self.steerin_angle_points.set_data(x, self.steering_angle_data_window)
         self.steering_angle_ax.set_xlim(np.min(x), np.max(x))
-        self.steering_angle_ax.set_ylim(np.min(self.steering_angle_data_window), np.max(self.steering_angle_data_window))
+        self.steering_angle_ax.set_ylim(np.min(self.steering_angle_data_window),
+                                        np.max(self.steering_angle_data_window))
 
         self.speed_data_window[0] = actions['gas']
         self.speed_data_window = np.roll(self.speed_data_window, -1)
@@ -257,6 +303,106 @@ class CockpitView(threading.Thread):
 
         self.plot_canvas.draw()
 
+    def _prepare_graph(self):
+        nodes = self.viewmodel.net.postsynaptic_learning_neurons
+        connections = self.viewmodel.net.plastic_connections
+
+        G = nx.DiGraph()
+
+        for node in nodes:
+            G.add_node(node)
+
+        i = 0
+        # edge_labels = {}
+        for conn in connections:
+            source = conn[0]
+            target = conn[1]
+            G.add_edge(source, target)
+            # edge_labels[(source, target)] = str(weights[i])
+            i += 1
+
+        neuron_layers = {}
+
+        nodes = G.nodes_iter()
+
+        def set_layer(node, layer):
+            neighbors = G.neighbors(node)
+            for n in neighbors:
+                neuron_layers[n] = layer + 1
+                set_layer(n, layer + 1)
+
+        for node in nodes:
+            in_deg = G.in_degree(node)
+
+            if in_deg == 0:
+                neuron_layers[node] = 0
+                neighbors = G.neighbors(node)
+
+                for n in neighbors:
+                    set_layer(node, 0)
+
+        nodes = np.array([n for n in G.nodes_iter()])
+        pos = {}
+
+        max_layer = np.max(neuron_layers.values())
+        layers = np.arange(0, max_layer + 1)
+        ln = np.array([neuron_layers[x] for x in nodes])
+
+        y_interval = 0 if max_layer == 0 else 1.0 / max_layer
+
+        i = 0
+        for layer in layers:
+            n = ln == layer
+            neurons_in_layer = len(np.nonzero(n)[0])
+            x_interval = 1.0 / (neurons_in_layer - 1) if neuron_layers > 1 else 0
+            y = i * y_interval
+            j = 0
+
+            for node in nodes[n]:
+                x = j * x_interval + 0.5
+                pos[node] = (x, y)
+                j += 1
+
+            i += 1
+
+        self._nodes_pos = pos
+        self._G = G
+
+    def _update_graph(self):
+        G = self._G
+        pos = self._nodes_pos
+        self.network_plot_ax.clear()
+
+        weights = self.viewmodel.net.get_weights()
+        events_spikes = self.viewmodel.net.get_events_spike_detectors()
+
+        num_spikes_per_neuron = {}
+        nodes = [x for x in G.nodes_iter()]
+
+        for n in nodes:
+            num_spikes_per_neuron[n] = 0
+
+        for e in events_spikes:
+            if len(e['senders']) > 0:
+                sender = e['senders'][0]
+                if sender in nodes:
+                    num_spikes_per_neuron[sender] += len(e['senders'])
+
+        widths = (weights - np.min(weights)) / (np.max(weights) - np.min(weights))*4 + 2
+        node_colors = [num_spikes_per_neuron[x] for x in G.nodes_iter()]
+
+        nx.draw_networkx_nodes(G, pos, ax=self.network_plot_ax,
+                               node_color=node_colors,cmap=cm.get_cmap('gist_heat'),vmin=0)
+
+        nx.draw_networkx_edges(G, pos, width=widths, ax=self.network_plot_ax,
+                               alpha=0.5,arrows=False,
+                               edge_color=weights,
+                               edge_cmap=cm.get_cmap('PiYG'))
+
+        # nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, ax=self.network_plot_ax)
+        self.network_plot_canvas.draw()
+
+
     def run(self):
         self.root = Tk.Tk()
         self.root.columnconfigure(0, weight=1)
@@ -264,25 +410,31 @@ class CockpitView(threading.Thread):
         self.root.wm_title("Cockpit")
 
         self.viewmodel.initialize_view_model()
+
+        # Pre-Compute positions of nodes and graph structure
+        self._prepare_graph()
+
         self.root.protocol("WM_DELETE_WINDOW", self.callback)
 
         # Create GUI Elements
         leftsiteframe = Tk.Frame(self.root)
         entry_weights_field = Tk.Entry(self.root)
-        set_weights_button = Tk.Button(self.root, text="Set Weights", command=lambda: self.viewmodel.set_weights_command(entry_weights_field))
+        set_weights_button = Tk.Button(self.root, text="Set Weights",
+                                       command=lambda: self.viewmodel.set_weights_command(entry_weights_field))
         learn_checkbutton = Tk.Checkbutton(self.root, text="Should Learn?", var=self.viewmodel.should_learn)
         self.use_last_checkbutton = Tk.Checkbutton(self.root, text="Use Last Reset Point?", var=self.viewmodel.use_last)
         reset_car_button = Tk.Button(self.root, text="Reset Car", command=self.viewmodel.reset_car_command)
-        constant_weights_text = Tk.Text(self.root, height=1, width=20)
         reset_weights_button = Tk.Button(self.root, text="Reset Weights", command=self.viewmodel.reset_weights_command)
-        discount_factor_scale = Tk.Scale(self.root, from_=0, to=100, orient=Tk.HORIZONTAL)
+        publish_action_checkbutton = Tk.Checkbutton(self.root, text="Publish Car Actions?",
+                                                    var=self.viewmodel.publish_car_actions)
 
         self.left_weights_mean_label = Tk.Label(self.root, text="left", textvariable=self.viewmodel.weights_mean_left)
-        self.right_weights_mean_label = Tk.Label(self.root, text="right", textvariable=self.viewmodel.weights_mean_right)
+        self.right_weights_mean_label = Tk.Label(self.root, text="right",
+                                                 textvariable=self.viewmodel.weights_mean_right)
         self.camera_label = Tk.Label(self.root)
         self.weights_image_label = Tk.Label(self.root)
 
-        # Steering Angle plot
+        # Car State Plots
         self.plot_figure = Figure(figsize=(5, 4), dpi=100)
         self.plot_canvas = FigureCanvasTkAgg(self.plot_figure, master=self.root)
         self.plot_canvas.show()
@@ -291,7 +443,8 @@ class CockpitView(threading.Thread):
         self.speed_ax = self.plot_figure.add_subplot(512, sharex=self.steering_angle_ax, title="Speed")
         self.reward_ax = self.plot_figure.add_subplot(513, sharex=self.steering_angle_ax, title="Reward")
         self.distance_ax = self.plot_figure.add_subplot(514, sharex=self.steering_angle_ax, title="Distance")
-        self.angle_vehicle_lane_ax = self.plot_figure.add_subplot(515, sharex=self.steering_angle_ax, title="Angle Vehicle Lane")
+        self.angle_vehicle_lane_ax = self.plot_figure.add_subplot(515, sharex=self.steering_angle_ax,
+                                                                  title="Angle Vehicle Lane")
 
         for l in self.steering_angle_ax.get_xticklabels():
             l.set_visible(False)
@@ -317,6 +470,12 @@ class CockpitView(threading.Thread):
         self.speed_points = self.speed_ax.plot(0, 0, 'c-o', markersize=3)[0]
         self.angle_vehicle_lane_points = self.angle_vehicle_lane_ax.plot(0, 0, 'c-o', markersize=3)[0]
 
+        # Network Topology Plot
+        self.network_plot = Figure(figsize=(5, 4), dpi=100)
+        self.network_plot_canvas = FigureCanvasTkAgg(self.network_plot, master=self.root)
+        self.network_plot_ax = self.network_plot.add_subplot(111, title="Network Topology")
+
+        self.network_plot_canvas.show()
         # Arrange GUI Elements
 
         leftsiteframe.grid(row=2, column=0)
@@ -326,13 +485,11 @@ class CockpitView(threading.Thread):
         reset_weights_button.grid(row=6, column=0)
         set_weights_button.grid(row=7, column=0)
         entry_weights_field.grid(row=8, column=0)
-        # constant_weights_text.grid(row=2, column=1)
-        #self.left_weights_mean_label.grid(row=1, column=1)
-        #self.right_weights_mean_label.grid(row=2, column=1)
-        self.camera_label.grid(row=0,column=0)
+        self.camera_label.grid(row=0, column=0)
         self.weights_image_label.grid(row=1, column=0)
-        #discount_factor_scale.grid(row=6, column=1)
-        self.plot_canvas.get_tk_widget().grid(row=0, column=1, rowspan=7, sticky='nswe', columnspan=2)
+        self.plot_canvas.get_tk_widget().grid(row=0, column=1, rowspan=7, sticky='nswe')
+        self.network_plot_canvas.get_tk_widget().grid(row=0, column=2, rowspan=7, sticky='nswe')
+        publish_action_checkbutton.grid(row=9, column=0)
 
         self.root.mainloop()
 
