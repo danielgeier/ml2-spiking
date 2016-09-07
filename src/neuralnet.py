@@ -26,6 +26,7 @@ import logging.handlers as handlers
 import logging
 import cockpit
 
+
 from std_msgs.msg import Bool, Float64MultiArray
 
 # Logging/Dumping locations
@@ -211,6 +212,8 @@ class NormalizedSteeringHelper(object):
         self._window_size = normalize_angle_wsize
         self._left = np.zeros(normalize_angle_wsize)
         self._right = np.zeros(normalize_angle_wsize)
+        self._avg_left= 0
+        self._avg_right = 0
 
     def calculate_steering(self, num_spikes_l, num_spikes_r):
         spikes_diff = num_spikes_l - num_spikes_r
@@ -223,15 +226,15 @@ class NormalizedSteeringHelper(object):
             self._right[0] = spikes_diff
             self._right = np.roll(self._right, -1)
 
-        avg_left = np.max(self._left)
-        avg_right = np.min(self._right)
+        self._avg_left = max(self._avg_left, np.max(self._left))
+        self._avg_right = min(np.min(self._right), self._avg_right)
 
         angle = spikes_diff / 10
 
-        if (spikes_diff >= 0) and (avg_left != 0.):
-            angle = min(1, spikes_diff / avg_left)  # minus = rechts
-        if (spikes_diff < 0) and (avg_right != 0.):
-            angle = max(-1, spikes_diff / abs(avg_right))  # minus = rechts
+        if (spikes_diff >= 0) and (self._avg_left != 0.):
+            angle = min(1, spikes_diff / self._avg_left)  # minus = rechts
+        if (spikes_diff < 0) and (self._avg_right != 0.):
+            angle = max(-1, spikes_diff / abs(self._avg_right))  # minus = rechts
 
         print "Spikes Difference: ", spikes_diff, ", Angle: ", angle
         return angle
@@ -250,8 +253,6 @@ class BraitenbergSteeringHelper:
     def calculate_steering(self, num_spikes_l, num_spikes_r):
         spikes_diff = num_spikes_l - num_spikes_r
         spikes_diff = 0 if np.abs(spikes_diff) <= self._spikes_threshold else spikes_diff
-        print "Spikes Difference: ", spikes_diff
-
         return spikes_diff / self._spikes_max
 
 
@@ -608,6 +609,7 @@ class BaseNetworkOut(BaseNetwork):
         else:
             gas = 0.5
 
+        print gas, ':gas'
         actions = {'gas': gas, 'brake': brake, 'steering_angle': angle}
 
         return actions
@@ -838,18 +840,18 @@ class DeepNetwork(BaseNetwork):
 
         self.reset_weights()
 
-    def _reset_weights(self):
-        weights = np.random.uniform(-0.5, 2, len(self.plastic_connections)) * 3000
+    def reset_weights(self):
+        weights = np.random.uniform(0.1, 2, len(self.plastic_connections)) * 2500
         self.set_weights(weights)
 
-    def reset_weights(self):
-        weights = np.random.uniform(-0.5, 2, len(self.plastic_connections)) * 3000
+    def _reset_weights(self):
+        weights = np.random.uniform(0.1, 2, len(self.plastic_connections)) * 2500
         weights_inout = np.zeros(((NUM_OUT_LEARNING_LAYER + NUM_IN_LEARNING_LAYER) * self._number_neurons_per_layer),
                                  dtype=Float64MultiArray)
         counter = 0
         for i in range(NUM_OUT_LEARNING_LAYER + NUM_IN_LEARNING_LAYER):
             temp_weights = (np.random.dirichlet(np.ones(self._number_neurons_per_layer), size=1)) * 100
-            temp_weights_avg = np.average(temp_weights)
+            temp_weights_avg = np.median(temp_weights)
             temp_weights[:] = [x - temp_weights_avg for x in temp_weights]
             temp_weights *= 250
 
@@ -1150,7 +1152,6 @@ def main(argv):
     n = parser.parse_args()
 
     world = World()
-
     network, actor_network = NetworkBuilder.braitenberg_deep_network(number_middle_layers=2, number_neurons_per_layer=5, image_topic='/spiky/binary_image')
     # network, actor_network = NetworkBuilder.braitenberg_network(image_topic='/spiky/binary_image')
 
