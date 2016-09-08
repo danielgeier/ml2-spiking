@@ -211,8 +211,8 @@ class NormalizedSteeringHelper(object):
         self._window_size = normalize_angle_wsize
         self._left = np.zeros(normalize_angle_wsize)
         self._right = np.zeros(normalize_angle_wsize)
-        self._avg_left= 0
-        self._avg_right = 0
+        self._avg_left= 5
+        self._avg_right = -5
 
     def calculate_steering(self, num_spikes_l, num_spikes_r):
         spikes_diff = num_spikes_l - num_spikes_r
@@ -696,12 +696,14 @@ class BaseWorld:
 class World(BaseWorld):
     def __init__(self, topic='/laneletInformation'):
         super(World, self).__init__()
-        self.sub_lanelet = rospy.Subscriber(topic, Float64MultiArray, self._update_state,
-                                            queue_size=1)
+        self.sub_lanelet = rospy.Subscriber(topic, Float64MultiArray, self._update_state,queue_size=1)
         self._state = None
         self._last_reward = None
         self._last_distance = None
         self._last_angle_vehicle_lane = None
+
+
+
 
     def _calculate_reward(self, actions):
         if actions['steering_angle'] < 0:
@@ -901,7 +903,7 @@ class SizedTimedRotatingFileHandler(handlers.TimedRotatingFileHandler):
 
 
 class NetworkLogger:
-    def __init__(self, network, formatstring='%.3f', log_period=900, maxbytes=104857600, compressed=False, when='D',
+    def __init__(self, agent, network, formatstring='%.3f', log_period=900, maxbytes=104857600, compressed=False, when='D',
                  interval=10, backup_count=5):
         self._network = network
 
@@ -936,6 +938,7 @@ class NetworkLogger:
                                                        interval=interval, encoding=encoding)
         self._reward_logger.addHandler(reward_handler)
         self._reward = []
+        self._agent = agent;
         self._starttime = time.time()
         self._period_starttime = self._starttime
         self._formatstring = formatstring
@@ -944,7 +947,7 @@ class NetworkLogger:
     def log(self):
         now = time.time()
         actions = self._network.decode_actions()
-        self._reward.append(self._network.learner.world.calculate_reward(actions))
+        self._reward.append(self._agent.learner.world.calculate_reward(actions))
 
         if now - self._period_starttime > self._log_period:
             self.log_weights(now)
@@ -1135,15 +1138,15 @@ def main(argv):
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2,
                                    DISCOUNT_FACTOR, TIME_STEP, LEARNING_RATE)
 
-    agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=False, network=network)
+    agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=True, network=network)
 
     n.plot = True
     if n.plot:
         plotter = NetworkPlotter(agent, plot_steps=20)
 
-    n.log = False
+    n.log = True
     if n.log:
-        logger = NetworkLogger(network, log_period=10)
+        logger = NetworkLogger(agent, network, log_period=600)
 
     n.cockpit = True
     if n.cockpit:
