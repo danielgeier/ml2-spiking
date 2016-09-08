@@ -11,6 +11,7 @@ from PIL import Image, ImageTk
 from cv_bridge import CvBridge
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from matplotlib.pyplot import NullLocator
 import matplotlib.cm as cm
 from vehicle_control.srv import *
 
@@ -98,10 +99,15 @@ class MockNetwork:
                                     [5047, 5033, 0, 51, 0], [5047, 5034, 0, 51, 1], [5048, 5033, 0, 51, 0],
                                     [5048, 5034, 0, 51, 1]]
 
+        self.spike_events = [{'senders': [5027, 5027, 5027]}, {'senders': [5028, 5028]}]
+
         self.weights = np.random.rand(len(self.plastic_connections))
 
+    def get_events_spike_detectors(self):
+        return self.spike_events
+
     def get_weights(self):
-        return self.weights
+        return np.random.rand(len(self.plastic_connections))
 
     def set_weights(self, value):
         self.weights = value
@@ -181,6 +187,20 @@ class CockpitViewModel:
 
 
 class CockpitView(threading.Thread):
+
+    class BlitDrawing:
+        def __init__(self, figure, canvas, ax):
+            self.figure = figure
+            self.canvas = canvas
+            self.ax = ax
+            self.background = figure.canvas.copy_from_bbox(ax.bbox)
+
+        def clear(self):
+            self.figure.canvas.restore_region(self.background)
+
+        def blit(self):
+            self.figure.canvas.blit(self.ax.bbox)
+
     def __init__(self, viewmodel):
         threading.Thread.__init__(self)
         self.viewmodel = viewmodel
@@ -189,6 +209,7 @@ class CockpitView(threading.Thread):
         self.right_weights_mean_label = None
         self.use_last_checkbutton = None
         self.camera_label = None
+        self._update_camera_var = None
         self.weights_image_label = None
 
         # Plot Parents
@@ -207,6 +228,8 @@ class CockpitView(threading.Thread):
         self.distance_points = None
         self.speed_points = None
         self.angle_vehicle_lane_points = None
+
+        self._update_plots_var = None
 
         # Step counter for plot
         self.plot_step = 0
@@ -227,7 +250,9 @@ class CockpitView(threading.Thread):
         # Graph and Node positions
         self._nodes_pos = None
         self._G = None
+        self._update_graph_var = None
 
+        self.network_blit_drawing = None
 
     def callback(self):
         self.root.quit()
@@ -235,10 +260,15 @@ class CockpitView(threading.Thread):
 
     def update(self):
         # Update Camera picture
-        self._update_camera_image()
-        self._update_weights_image()
-        self._update_plots()
-        self._update_graph()
+        if self._update_camera_var.get():
+            self._update_camera_image()
+
+        if self._update_plots_var.get():
+            self._update_plots()
+
+        if self._update_graph_var.get():
+            self._update_graph()
+
         self.plot_step += 1
 
     def _update_camera_image(self):
@@ -393,6 +423,8 @@ class CockpitView(threading.Thread):
         widths = (weights - np.min(weights)) / (np.max(weights) - np.min(weights))*4 + 2
         node_colors = [num_spikes_per_neuron[x] for x in G.nodes_iter()]
 
+        self.network_plot_ax.lines = []
+
         nx.draw_networkx_nodes(G, pos, ax=self.network_plot_ax,
                                node_color=node_colors,cmap=cm.get_cmap('gist_heat'),vmin=0)
 
@@ -401,9 +433,16 @@ class CockpitView(threading.Thread):
                                edge_color=weights,
                                edge_cmap=cm.get_cmap('PiYG'))
 
-        # nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, ax=self.network_plot_ax)
-        self.network_plot_canvas.draw()
+        for l in self.network_plot_ax.get_xticklabels():
+            l.set_visible(False)
 
+        for l in self.network_plot_ax.get_yticklabels():
+            l.set_visible(False)
+
+        self.network_plot_ax.xaxis.set_major_locator(NullLocator())
+        self.network_plot_ax.yaxis.set_major_locator(NullLocator())
+
+        self.network_plot_canvas.draw()
 
     def run(self):
         self.root = Tk.Tk()
@@ -430,6 +469,19 @@ class CockpitView(threading.Thread):
         publish_action_checkbutton = Tk.Checkbutton(self.root, text="Publish Car Actions?",
                                                     var=self.viewmodel.publish_car_actions)
 
+        self._update_graph_var = Tk.BooleanVar()
+        update_graph_checkbutton = Tk.Checkbutton(self.root, text="Update Graph", var=self._update_graph_var)
+        self._update_graph_var.set(True)
+
+        self._update_plots_var = Tk.BooleanVar()
+        update_plots_checkbutton = Tk.Checkbutton(self.root, text="Update Plots", var=self._update_plots_var)
+        self._update_plots_var.set(True)
+
+        self._update_camera_var = Tk.BooleanVar()
+        update_camera_checkbutton = Tk.Checkbutton(self.root, text="Update Camera", var=self._update_camera_var)
+        self._update_camera_var.set(True)
+
+
         self.left_weights_mean_label = Tk.Label(self.root, text="left", textvariable=self.viewmodel.weights_mean_left)
         self.right_weights_mean_label = Tk.Label(self.root, text="right",
                                                  textvariable=self.viewmodel.weights_mean_right)
@@ -447,7 +499,6 @@ class CockpitView(threading.Thread):
         self.distance_ax = self.plot_figure.add_subplot(514, sharex=self.steering_angle_ax, title="Distance")
         self.angle_vehicle_lane_ax = self.plot_figure.add_subplot(515, sharex=self.steering_angle_ax,
                                                                   title="Angle Vehicle Lane")
-
         for l in self.steering_angle_ax.get_xticklabels():
             l.set_visible(False)
             l.set_fontsize(0.0)
@@ -478,6 +529,9 @@ class CockpitView(threading.Thread):
         self.network_plot_ax = self.network_plot.add_subplot(111, title="Network Topology")
 
         self.network_plot_canvas.show()
+
+        self.network_blit_drawing = CockpitView.BlitDrawing(self.network_plot, self.network_plot_canvas,
+                                                            self.network_plot_ax)
         # Arrange GUI Elements
 
         leftsiteframe.grid(row=2, column=0)
@@ -487,10 +541,13 @@ class CockpitView(threading.Thread):
         reset_weights_button.grid(row=6, column=0)
         set_weights_button.grid(row=7, column=0)
         entry_weights_field.grid(row=8, column=0)
-        self.camera_label.grid(row=0, column=0)
-        self.weights_image_label.grid(row=1, column=0)
+        update_camera_checkbutton.grid(row=0, column=0)
+        self.camera_label.grid(row=1, column=0)
+        # self.weights_image_label.grid(row=1, column=0)
         self.plot_canvas.get_tk_widget().grid(row=0, column=1, rowspan=7, sticky='nswe')
         self.network_plot_canvas.get_tk_widget().grid(row=0, column=2, rowspan=7, sticky='nswe')
+        update_plots_checkbutton.grid(row=8, column=1)
+        update_graph_checkbutton.grid(row=8, column=2)
         publish_action_checkbutton.grid(row=9, column=0)
 
         self.root.mainloop()

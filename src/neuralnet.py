@@ -923,7 +923,7 @@ class SizedTimedRotatingFileHandler(handlers.TimedRotatingFileHandler):
 
 
 class NetworkLogger:
-    def __init__(self, network, formatstring='%.3f', log_period=900, maxbytes=104857600, compressed=False, when='D',
+    def __init__(self, agent, network, formatstring='%.3f', log_period=900, maxbytes=104857600, compressed=False, when='D',
                  interval=10, backup_count=5):
         self._network = network
 
@@ -962,11 +962,12 @@ class NetworkLogger:
         self._period_starttime = self._starttime
         self._formatstring = formatstring
         self._log_period = log_period
+        self._agent = agent
 
     def log(self):
         now = time.time()
         actions = self._network.decode_actions()
-        self._reward.append(self._network.learner.world.calculate_reward(actions))
+        self._reward.append(self._agent.learner.world.calculate_reward(actions))
 
         if now - self._period_starttime > self._log_period:
             self.log_weights(now)
@@ -1152,22 +1153,22 @@ def main(argv):
     n = parser.parse_args()
 
     world = World()
-    network, actor_network = NetworkBuilder.braitenberg_deep_network(number_middle_layers=2, number_neurons_per_layer=5, image_topic='/spiky/binary_image')
+    network, actor_network = NetworkBuilder.braitenberg_deep_network(number_middle_layers=1, number_neurons_per_layer=10, image_topic='/spiky/binary_image')
     # network, actor_network = NetworkBuilder.braitenberg_network(image_topic='/spiky/binary_image')
 
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2,
                                    DISCOUNT_FACTOR, TIME_STEP, LEARNING_RATE)
 
-    agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=False, network=network,
+    agent = SnnAgent(timestep=TIME_STEP, simduration=20, learner=learner, should_learn=True, network=network,
                      actor_network=actor_network)
 
     n.plot = True
     if n.plot:
         plotter = NetworkPlotter(agent, plot_steps=20)
 
-    n.log = False
+    n.log = True
     if n.log:
-        logger = NetworkLogger(network, log_period=10)
+        logger = NetworkLogger(agent, network, log_period=600)
 
     n.cockpit = True
     if n.cockpit:
