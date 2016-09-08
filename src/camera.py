@@ -31,6 +31,7 @@ class CameraNode:
             buff_size=65536 * 3
         )
 
+        self.pub_binary = rospy.Publisher("/spiky/binary_image", Image, queue_size=1)
         self.pub_raw = rospy.Publisher("/spiky/raw_image", Image, queue_size=1)
         self.pub_retina = rospy.Publisher("/spiky/retina_image", Image, queue_size=1)
 
@@ -47,9 +48,15 @@ class CameraNode:
         magno_frame = self.eye.getMagno()
 
         image_message_raw = self.bridge.cv2_to_imgmsg(gray, encoding="passthrough")
+
+        image_message_binary = cv2.threshold(gray, 50, 255, cv2.THRESH_BINARY)
+        image_message_binary = image_message_binary[1]
+        image_message_binary = self.bridge.cv2_to_imgmsg(image_message_binary, encoding="passthrough")
+
         image_message_retina = self.bridge.cv2_to_imgmsg(magno_frame, encoding="passthrough")
         self.pub_raw.publish(image_message_raw)
         self.pub_retina.publish(image_message_retina)
+        self.pub_binary.publish(image_message_binary)
 
     def shutdown(self):
         pass
