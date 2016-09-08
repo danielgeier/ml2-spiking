@@ -62,7 +62,7 @@ class CarControlNode:
             self.distance = lanelet_info.data[0]
             self.lanelet_information = LaneletInformation(lanelet_info.data)
             print self.lanelet_information
-            #self.pub_is_set_back.publish(False)
+            self.pub_is_set_back.publish(False)
             self.car_off_lane()
 
     def car_off_map(self, pose):
@@ -120,7 +120,6 @@ class CarControlNode:
         self.pub_carModel.publish(modelState)
 
         self.oldsec_reset_constantly = time.time()
-
         return res
 
     def reset_car_update(self):

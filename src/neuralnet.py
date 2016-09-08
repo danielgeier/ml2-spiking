@@ -212,8 +212,8 @@ class NormalizedSteeringHelper(object):
         self._window_size = normalize_angle_wsize
         self._left = np.zeros(normalize_angle_wsize)
         self._right = np.zeros(normalize_angle_wsize)
-        self._avg_left= 0
-        self._avg_right = 0
+        self._avg_left= 5
+        self._avg_right = -5
 
     def calculate_steering(self, num_spikes_l, num_spikes_r):
         spikes_diff = num_spikes_l - num_spikes_r
@@ -716,12 +716,14 @@ class BaseWorld:
 class World(BaseWorld):
     def __init__(self, topic='/laneletInformation'):
         super(World, self).__init__()
-        self.sub_lanelet = rospy.Subscriber(topic, Float64MultiArray, self._update_state,
-                                            queue_size=1)
+        self.sub_lanelet = rospy.Subscriber(topic, Float64MultiArray, self._update_state,queue_size=1)
         self._state = None
         self._last_reward = None
         self._last_distance = None
         self._last_angle_vehicle_lane = None
+
+
+
 
     def _calculate_reward(self, actions):
         if actions['steering_angle'] < 0:
@@ -958,6 +960,7 @@ class NetworkLogger:
                                                        interval=interval, encoding=encoding)
         self._reward_logger.addHandler(reward_handler)
         self._reward = []
+        self._agent = agent;
         self._starttime = time.time()
         self._period_starttime = self._starttime
         self._formatstring = formatstring
