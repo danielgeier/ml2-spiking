@@ -205,11 +205,6 @@ class ReinforcementLearner(Learner):
         self._weights = weights
 
 
-class SimpleLearner(Learner):
-    def __init__(self, network, world):
-        pass
-
-
 class NormalizedSteeringHelper(object):
     def __init__(self, normalize_angle_wsize):
         self._window_size = normalize_angle_wsize
@@ -312,6 +307,7 @@ class BaseNetwork:
         # STDP Connections
         self._plastic_connections = None
         self._postsynaptic_learning_neurons = []
+        self._neurons = set([])
 
         self._should_learn = None  # TODO: Remove
 
@@ -366,6 +362,10 @@ class BaseNetwork:
             self._plastic_connections = nest.nest.GetConnections(target=self.postsynaptic_learning_neurons)
         return self._plastic_connections
 
+    @property
+    def neurons(self):
+        return self._neurons
+
     def get_weights(self):
         connections = self.plastic_connections
         return np.array(nest.nest.GetStatus(connections, 'weight'))
@@ -375,13 +375,13 @@ class BaseNetwork:
         nest.nest.SetStatus(connections, [{'weight': w} for w in weights])
 
     def reset_weights(self):
-        positive_percentage = 0.67
+        positive_percentage = 0.8
 
         num_positive_weights = np.floor(positive_percentage*len(self.plastic_connections))
         num_negative_weights = len(self.plastic_connections) - num_positive_weights
 
         positive_weights = np.random.uniform(0, 2, num_positive_weights) * 5000
-        negative_weights = -np.random.uniform(0, 2, num_negative_weights) * 2000
+        negative_weights = -np.random.uniform(0, 2, num_negative_weights) * 3000
 
         weights = np.concatenate((positive_weights, negative_weights))
         np.random.shuffle(weights)
@@ -720,7 +720,7 @@ class BaseWorld:
     __metaclass__ = ABCMeta
 
     def __init__(self):
-        pass
+        self._loss = 0
 
     @abstractmethod
     def calculate_reward(self, actions):
@@ -733,6 +733,14 @@ class BaseWorld:
     @abstractproperty
     def last_reward(self):
         pass
+
+    @property
+    def loss(self):
+        return self._loss
+
+    @loss.setter
+    def loss(self, value):
+        self._loss = value
 
 
 class World(BaseWorld):
@@ -821,13 +829,16 @@ class BraitenbergSupervisedWorld(World):
         s = np.sign(steering_angle) * np.sign(brait_steering_angle)
         print "My Steering: ", steering_angle, " Braitenberg Steering: ", brait_steering_angle
         if s < 0:
-            reward = -200
+            reward = -300
         elif s > 0:
-            reward = +200
+            reward = +300
         else:
-            reward = 100 if s1==s2 else -100
+            reward = 50 if s1 == s2 else -200
 
         #reward += .5*prev_reward
+
+        self.loss = np.abs(steering_angle - brait_steering_angle)
+        print "Loss: ", self.loss
 
         return reward
 
@@ -855,9 +866,12 @@ class DeepNetwork(BaseNetwork):
             self._middle_pops.append(current_pop)
             if i == 0:
                 # Connect input layer to first middle layer
-                p = Projection(incoming_population, self._middle_pops[i], AllToAllConnector())
-                for neuron in incoming_population:
-                    self._neuron_layer
+
+                if isinstance(incoming_population, Population):
+                    p = Projection(incoming_population, self._middle_pops[i], AllToAllConnector())
+                else:
+                    for pop in incoming_population:
+                        p = Projection(pop, self._middle_pops[i], AllToAllConnector())
             else:
                 # Connect latest middle layer to current
                 connection = Projection(self._middle_pops[i - 1], self._middle_pops[i], AllToAllConnector())
@@ -986,6 +1000,7 @@ class NetworkLogger:
         ext = 'bz2' if compressed else 'txt'
         weights_filename = os.path.join(dumpdir, 'weights.' + ext)
         reward_filename = os.path.join(dumpdir, 'reward.' + ext)
+        carstate_filename = os.path.join(dumpdir, 'carstate.' + ext)
 
         self._reward_logger = logging.getLogger("RewardLogger")
         self._reward_logger.setLevel(logging.INFO)
@@ -993,17 +1008,31 @@ class NetworkLogger:
         self._weights_logger = logging.getLogger('WeightsLogger')
         self._weights_logger.setLevel(logging.INFO)
 
+        self._carstate_logger = logging.getLogger('CarstateLogger')
+        self._carstate_logger.setLevel(logging.INFO)
+
         encoding = 'bz2' if compressed else None
+
+        #Logs the weights
         weights_handler = SizedTimedRotatingFileHandler(weights_filename, max_bytes=maxbytes, backup_count=backup_count,
                                                         when=when,
                                                         interval=interval, encoding=encoding)
 
         self._weights_logger.addHandler(weights_handler)
 
+        #Logs the mean reward
         reward_handler = SizedTimedRotatingFileHandler(reward_filename, max_bytes=maxbytes, backup_count=backup_count,
                                                        when=when,
                                                        interval=interval, encoding=encoding)
         self._reward_logger.addHandler(reward_handler)
+
+        # Logs information about the current car state (Lanelet stufF)
+        carstate_handler = SizedTimedRotatingFileHandler(carstate_filename, max_bytes=maxbytes, backup_count=backup_count,
+                                                       when=when,
+                                                       interval=interval, encoding=encoding)
+
+        self._carstate_logger.addHandler(carstate_handler)
+
         self._reward = []
         self._agent = agent;
         self._starttime = time.time()
@@ -1011,6 +1040,7 @@ class NetworkLogger:
         self._formatstring = formatstring
         self._log_period = log_period
         self._agent = agent
+        self._world = self._agent.learner.world
 
     def log(self):
         now = time.time()
@@ -1020,6 +1050,7 @@ class NetworkLogger:
         if now - self._period_starttime > self._log_period:
             self.log_weights(now)
             self.log_reward(now)
+            self.log_car_state(now)
             self._period_starttime = now
 
     def log_reward(self, now):
@@ -1028,6 +1059,19 @@ class NetworkLogger:
         self._reward = []
 
         self._reward_logger.info('%f, %f' % (current_time, mean_reward))
+
+    def log_car_state(self, now):
+        current_time = now - self._starttime
+        state = self._world.current_state
+
+        actions = self._network.decode_actions()
+        reward = self._world.calculate_reward(actions)
+        loss = self._world.loss
+
+        if state is not None:
+            s = '%f,%f,%f,%f,%f,%f,%f' % (current_time, state.angle_vehicle_lane, state.distance,
+                                          float(state.is_left), float(state.is_right), reward, loss)
+            self._carstate_logger.info(s)
 
     def log_weights(self, now):
         current_time = now - self._starttime
@@ -1109,7 +1153,7 @@ class CompositeNetwork(BaseNetwork):
         return self._camera_network.last_frame
 
     def act(self):
-        return self.act()
+        return self._actor_network.act()
 
 
 class NetworkBuilder:
@@ -1147,6 +1191,24 @@ class NetworkBuilder:
             super(NetworkBuilder.DeepNetworkWithVehicleLaneAlignment, self).populate_plotter(plotter)
             plotter.add_spike_train_plot(self._vehicle_lane_alignment.output_pop, 'Vehicle Alignment')
 
+    class BraitenbergDeepNetworkParallel(DeepNetwork):
+        def __init__(self, number_middle_layers, number_neurons_per_layer):
+            super(NetworkBuilder.BraitenbergDeepNetworkParallel, self).__init__(number_middle_layers, number_neurons_per_layer)
+
+            self.braitenberg = NetworkBuilder.PassiveBraitenbergNetwork()
+            self.actor_network = BaseNetworkOut()
+            self.camera_network = self.braitenberg._network_in
+
+            self.build_network()
+            self.detectors = dict(self.detectors.items() + self.braitenberg.detectors.items() + self.actor_network.detectors.items())
+
+        def build_network(self):
+            ingoing_population = self.braitenberg._network_in.output_pop
+            outgoing_population = self.actor_network.input_pop
+
+            super(NetworkBuilder.BraitenbergDeepNetworkParallel, self).build_network(ingoing_population,
+                                                                                     outgoing_population)
+
     @staticmethod
     def braitenberg_network(image_topic='/spiky/retina_image', steering_helper=BraitenbergSteeringHelper(0,3)):
         network = BraitenbergNetwork(image_topic, steering_helper)
@@ -1165,6 +1227,16 @@ class NetworkBuilder:
                                    actor_network=actor_network, camera_network=braitenberg)
 
         return network, actor_network, braitenberg
+
+    @staticmethod
+    def braitenberg_deep_network_parallel(number_middle_layers=2, number_neurons_per_layer=5,
+                                          image_topic='/spiky/retina_image',
+                                          steering_helper=BraitenbergSteeringHelper(0,3)):
+        deep_parallel = NetworkBuilder.BraitenbergDeepNetworkParallel(number_middle_layers, number_neurons_per_layer)
+        n = CompositeNetwork(deep_parallel, deep_parallel.camera_network, deep_parallel.actor_network,
+                             camera_network=deep_parallel.camera_network, actor_network=deep_parallel.actor_network)
+
+        return n, deep_parallel.actor_network, deep_parallel.braitenberg
 
     @staticmethod
     def braitenberg_deep_network_with_alignment_neuron(number_middle_layers=2, number_neurons_per_layer=7):
@@ -1202,23 +1274,26 @@ def main(argv):
 
     #world = World()
 
-    network, actor_network, braitenberg = NetworkBuilder.braitenberg_deep_network(number_middle_layers=1, number_neurons_per_layer=5, image_topic='/spiky/retina_image')
+    #network, actor_network, braitenberg = NetworkBuilder.braitenberg_deep_network(number_middle_layers=1, number_neurons_per_layer=5, image_topic='/spiky/retina_image')
     #network, actor_network = NetworkBuilder.braitenberg_network(image_topic='/spiky/binary_image')
 
+    network, actor_network, braitenberg = NetworkBuilder.braitenberg_deep_network_parallel(number_middle_layers=1, number_neurons_per_layer=5)
+
     world = BraitenbergSupervisedWorld(braitenberg)
+
     learner = ReinforcementLearner(network, world, BETA_SIGMA, SIGMA, TAU, NUM_TRACE_STEPS, 2,
                                    DISCOUNT_FACTOR, TIME_STEP, LEARNING_RATE)
 
     agent = SnnAgent(timestep=TIME_STEP, simduration=5, learner=learner, should_learn=True, network=network,
                      actor_network=actor_network)
 
-    n.plot = True
+    n.plot = False
     if n.plot:
         plotter = NetworkPlotter(agent, plot_steps=20)
 
     n.log = True
     if n.log:
-        logger = NetworkLogger(agent, network, log_period=600)
+        logger = NetworkLogger(agent, network, log_period=60)
 
     n.cockpit = True
     if n.cockpit:
