@@ -246,11 +246,13 @@ class CockpitView(threading.Thread):
         self.network_plot = None
         self.network_plot_canvas = None
         self.network_plot_ax = None
-
+        self._show_edge_labels_var = None
+        self._show_node_labels_var = None
+        self._update_graph_var = None
         # Graph and Node positions
         self._nodes_pos = None
         self._G = None
-        self._update_graph_var = None
+
 
         self.network_blit_drawing = None
 
@@ -259,6 +261,10 @@ class CockpitView(threading.Thread):
         self.root.destroy()
 
     def update(self):
+        if self._update_camera_var is None or self._update_plots_var is None or self._update_graph_var is None:
+            self.plot_step += 1
+            return
+
         # Update Camera picture
         if self._update_camera_var.get():
             self._update_camera_image()
@@ -409,10 +415,21 @@ class CockpitView(threading.Thread):
         events_spikes = self.viewmodel.net.get_events_spike_detectors()
 
         num_spikes_per_neuron = {}
+        node_labels = {}
         nodes = [x for x in G.nodes_iter()]
 
         for n in nodes:
             num_spikes_per_neuron[n] = 0
+            node_labels[n] = str(n)
+
+        edge_labels = None
+        if self._show_edge_labels_var.get():
+            edges = G.edges_iter()
+            edge_labels = {}
+            i = 0
+            for e in edges:
+                edge_labels[e] = '%.1f' % weights[i]
+                i += 1
 
         for e in events_spikes:
             if len(e['senders']) > 0:
@@ -420,13 +437,21 @@ class CockpitView(threading.Thread):
                 if sender in nodes:
                     num_spikes_per_neuron[sender] += len(e['senders'])
 
-        widths = (weights - np.min(weights)) / (np.max(weights) - np.min(weights))*4 + 2
+        widths = ((weights - np.min(weights)) / (np.max(weights) - np.min(weights)))*4 + 2
         node_colors = [num_spikes_per_neuron[x] for x in G.nodes_iter()]
 
         self.network_plot_ax.lines = []
 
         nx.draw_networkx_nodes(G, pos, ax=self.network_plot_ax,
                                node_color=node_colors,cmap=cm.get_cmap('gist_heat'),vmin=0)
+
+        if self._show_node_labels_var.get():
+            nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=5, ax=self.network_plot_ax, font_color='g'
+                                    , font_weight='bold')
+
+        if self._show_edge_labels_var.get() and edge_labels is not None:
+            nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7, ax=self.network_plot_ax,
+                                         label_pos=0.4)
 
         nx.draw_networkx_edges(G, pos, width=widths, ax=self.network_plot_ax,
                                alpha=0.5,arrows=False,
@@ -472,6 +497,16 @@ class CockpitView(threading.Thread):
         self._update_graph_var = Tk.BooleanVar()
         update_graph_checkbutton = Tk.Checkbutton(self.root, text="Update Graph", var=self._update_graph_var)
         self._update_graph_var.set(True)
+
+        self._show_node_labels_var = Tk.BooleanVar()
+        show_node_labels_checkbutton = Tk.Checkbutton(self.root, text="Show Node Labels?",
+                                                      var=self._show_node_labels_var)
+        self._show_node_labels_var.set(False)
+
+        self._show_edge_labels_var = Tk.BooleanVar()
+        show_edge_labels_checkbutton = Tk.Checkbutton(self.root, text="Show Edge Labels?",
+                                                      var=self._show_edge_labels_var)
+        self._show_edge_labels_var.set(False)
 
         self._update_plots_var = Tk.BooleanVar()
         update_plots_checkbutton = Tk.Checkbutton(self.root, text="Update Plots", var=self._update_plots_var)
@@ -524,7 +559,7 @@ class CockpitView(threading.Thread):
         self.angle_vehicle_lane_points = self.angle_vehicle_lane_ax.plot(0, 0, 'c-o', markersize=3)[0]
 
         # Network Topology Plot
-        self.network_plot = Figure(figsize=(5, 4), dpi=100)
+        self.network_plot = Figure(figsize=(10, 4), dpi=100)
         self.network_plot_canvas = FigureCanvasTkAgg(self.network_plot, master=self.root)
         self.network_plot_ax = self.network_plot.add_subplot(111, title="Network Topology")
 
@@ -548,6 +583,8 @@ class CockpitView(threading.Thread):
         self.network_plot_canvas.get_tk_widget().grid(row=0, column=2, rowspan=7, sticky='nswe')
         update_plots_checkbutton.grid(row=8, column=1)
         update_graph_checkbutton.grid(row=8, column=2)
+        show_node_labels_checkbutton.grid(row=9, column=2)
+        show_edge_labels_checkbutton.grid(row=10, column=2)
         publish_action_checkbutton.grid(row=9, column=0)
 
         self.root.mainloop()
