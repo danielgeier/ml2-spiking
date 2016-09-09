@@ -825,17 +825,18 @@ class BraitenbergSupervisedWorld(World):
 
         s1 = np.sign(steering_angle)
         s2 = np.sign(brait_steering_angle)
+        diff = np.abs(steering_angle - brait_steering_angle)
 
-        s = np.sign(steering_angle) * np.sign(brait_steering_angle)
-        print "My Steering: ", steering_angle, " Braitenberg Steering: ", brait_steering_angle
-        if s < 0:
-            reward = -300
-        elif s > 0:
-            reward = +300
+        if s1 != s2:
+            reward = (1.0-diff) * 400 * (-np.abs(s1-s2))
         else:
-            reward = 50 if s1 == s2 else -200
+            reward = (1-diff)*400
 
-        #reward += .5*prev_reward
+        # If car is too far outside, don't learn anything
+        if self.current_state is not None:
+            if (self.current_state.is_left and self.current_state.distance > 0.6) or \
+                    (self.current_state.is_right and self.current_state.distance > 0.2):
+                reward = 0
 
         self.loss = np.abs(steering_angle - brait_steering_angle)
         print "Loss: ", self.loss

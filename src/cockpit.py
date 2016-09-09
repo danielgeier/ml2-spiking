@@ -409,8 +409,10 @@ class CockpitView(threading.Thread):
     def _update_graph(self):
         G = self._G
         pos = self._nodes_pos
+
         self.network_plot_ax.clear()
 
+        connections = self.viewmodel.net.plastic_connections
         weights = self.viewmodel.net.get_weights()
         events_spikes = self.viewmodel.net.get_events_spike_detectors()
 
@@ -423,13 +425,14 @@ class CockpitView(threading.Thread):
             node_labels[n] = str(n)
 
         edge_labels = None
-        if self._show_edge_labels_var.get():
-            edges = G.edges_iter()
-            edge_labels = {}
-            i = 0
-            for e in edges:
-                edge_labels[e] = '%.1f' % weights[i]
-                i += 1
+        edges_sign = []
+
+        edges = G.edges_iter()
+        edge_labels = {}
+        i = 0
+        for e in edges:
+            edge_labels[e] = '%.1f' % weights[i]
+            i += 1
 
         for e in events_spikes:
             if len(e['senders']) > 0:
@@ -437,10 +440,13 @@ class CockpitView(threading.Thread):
                 if sender in nodes:
                     num_spikes_per_neuron[sender] += len(e['senders'])
 
-        widths = ((weights - np.min(weights)) / (np.max(weights) - np.min(weights)))*4 + 2
+        weights_abs = np.abs(weights)
+        widths = ((weights_abs - np.min(weights_abs)) / (np.max(weights_abs) - np.min(weights_abs)))*4 + 2
         node_colors = [num_spikes_per_neuron[x] for x in G.nodes_iter()]
 
         self.network_plot_ax.lines = []
+
+        max_abs = np.max(np.abs(weights))
 
         nx.draw_networkx_nodes(G, pos, ax=self.network_plot_ax,
                                node_color=node_colors,cmap=cm.get_cmap('gist_heat'),vmin=0)
@@ -456,7 +462,9 @@ class CockpitView(threading.Thread):
         nx.draw_networkx_edges(G, pos, width=widths, ax=self.network_plot_ax,
                                alpha=0.5,arrows=False,
                                edge_color=weights,
-                               edge_cmap=cm.get_cmap('PiYG'))
+                               edge_vmin=-max_abs,
+                               edge_vmax=max_abs,
+                               edge_cmap=cm.get_cmap('RdYlGn'))
 
         for l in self.network_plot_ax.get_xticklabels():
             l.set_visible(False)
